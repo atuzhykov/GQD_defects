@@ -9,7 +9,7 @@ from orb_models.forcefield.calculator import ORBCalculator
 from config import molecules_data
 from utils import move_atom_transform, track_core_structure
 
-# put True if you just want to see certain atoms indices, otherwise (for launch calculation, put False)
+# set True if you just want to see certain atoms indices, otherwise (for launch calculation set False)
 DEBUG_MODE = False
 
 

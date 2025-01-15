@@ -3,28 +3,20 @@ import numpy as np
 from ase.io import read
 from ase.optimize import FIRE
 from ase.visualize import view
-# from orb_models.forcefield import pretrained
-# from orb_models.forcefield.calculator import ORBCalculator
-from gpaw import GPAW, FermiDirac
+from orb_models.forcefield import pretrained
+from orb_models.forcefield.calculator import ORBCalculator
 from config import molecules_data
 from utils import rotate_bond_transform, delete_atoms_transform, move_atom_transform, get_distance, track_core_structure
 
 # put True if you just want to see certain atoms indices, otherwise (for launch calculation, put False)
-DEBUG_MODE = False
+DEBUG_MODE = True
 
-# Set up the calculator (ORB model on GPU)
-# device = "cuda"
-# orbff = pretrained.orb_v2(device=device)
-# calc = ORBCalculator(orbff, device=device)
+device = "cuda"
+orbff = pretrained.orb_v2(device=device)
+calc = ORBCalculator(orbff, device=device)
 
 
-calc = GPAW(mode='lcao',
-            basis='sz(dzp)',
-            xc='PBE',
-            kpts=(1, 1, 1),
-            occupations=FermiDirac(0.01),
-            txt='DFT.txt',
-            )
+
 
 # ============= MOLECULE SETUP =============
 # Choose which molecule to work with from config.py
@@ -78,15 +70,15 @@ stw_transform = [
 # Uncomment/comment transformations you want to use
 task_names = [
     "remove_atoms_transforms",
-    # "di_vacancy_transform",
-    # "split_vacancy_transform",
+    "di_vacancy_transform",
+    "split_vacancy_transform",
     "stw_transform"
 ]
 
 transforms_list = [
     remove_atoms_transforms,
-    # di_vacancy_transform,
-    # split_vacancy_transform,
+    di_vacancy_transform,
+    split_vacancy_transform,
     stw_transform
 ]
 
@@ -105,5 +97,5 @@ if not DEBUG_MODE:
             atoms=atoms.copy(),
             transforms=transform_list,
             calc=calc,
-            task_name=task_name + f"_GPAW_fmax_{fmax}_{os.path.splitext(os.path.basename(mol_finename))[0]}"
+            task_name=task_name + f"_fmax_{fmax}_{os.path.splitext(os.path.basename(mol_finename))[0]}"
         )
