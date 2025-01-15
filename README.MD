@@ -79,9 +79,9 @@ Before proceeding, ensure that you have the following:
 
 ### Step 3: Install Conda
 
-1. Go to the official Anaconda website: [https://www.anaconda.com/products/individual](https://www.anaconda.com/products/individual)
+1. Go to the official Anaconda website: [https://docs.anaconda.com/miniconda/](https://www.anaconda.com/products/individual)
 2. Download the appropriate version for your operating system
-3. Run the installer and follow the instructions to install Anaconda
+3. Run the installer and follow the instructions to 
 
 ### Step 4: Create a new Conda environment
 
