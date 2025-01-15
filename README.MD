@@ -1,3 +1,60 @@
+# Molecule Transformation using ASE and ORB Force Field
+
+This code demonstrates how to apply various transformations to a molecule using the Atomic Simulation Environment (ASE) and the ORB force field calculator. The transformations include removing atoms, creating vacancies, and applying the Stone-Wales transformation (bond rotation).
+
+## Prerequisites
+
+To run this code, you need to have the following libraries and modules installed:
+
+- ASE (Atomic Simulation Environment)
+- NumPy
+- ORB force field and calculator from the `orb_models` library
+
+## Configuration
+
+1. Set the `DEBUG_MODE` variable to `True` if you only want to display certain atom indices, or `False` if you want to perform the actual calculations.
+
+2. Specify the molecule to work with by setting the `molecule_name` variable. The corresponding file path and cell size are retrieved from the `molecules_data` dictionary defined in the `config.py` file.
+
+3. Define the transformations to be applied to the molecule. The code provides examples of the following transformations:
+   - Simple removal of one atom (`remove_atoms_transforms`)
+   - Removal of both atoms in a pair (`di_vacancy_transform`)
+   - Split vacancy transformation, where one atom is moved to the middle of a bond and the other atom is removed (`split_vacancy_transform`)
+   - Stone-Wales transformation, which involves rotating a bond (`stw_transform`)
+
+   You can customize the transformations by modifying the `axis_atoms` variable and uncommenting/commenting the corresponding entries in the `task_names` and `transforms_list` variables.
+
+## Usage
+
+1. Set the `DEBUG_MODE` variable to `True` if you only want to display certain atom indices, or `False` if you want to perform the actual calculations.
+
+2. Run the code using Python.
+
+3. If `DEBUG_MODE` is set to `False`, the code will:
+   - Set up the ORB force field calculator
+   - Optimize the structure using the FIRE optimizer
+   - Apply the selected transformations to the optimized structure
+   - Write the relaxed structure to an XYZ file
+
+4. If `DEBUG_MODE` is set to `True`, the code will only display the atom indices and not perform the actual calculations.
+
+## Customization
+
+- You can customize the molecule to work with by modifying the `molecule_name` variable and providing the corresponding file path and cell size in the `config.py` file.
+
+- The transformations can be customized by modifying the `axis_atoms` variable and defining new transformation functions in the code.
+
+- The `track_core_structure` function from the `utils` module is used to track the core structure of the molecule during the transformations. You can modify its parameters, such as the maximum force criterion (`fmax`), the atoms object, the list of transformations, the calculator, and the task name.
+
+## Additional Notes
+
+- The code uses the ORB force field calculator, which requires the `orb_models` library to be installed.
+
+- The `utils` module contains utility functions used in the code, such as `rotate_bond_transform`, `delete_atoms_transform`, `move_atom_transform`, `get_distance`, and `track_core_structure`.
+
+- The `config.py` file contains the configuration data for the molecules, such as the file path and cell size.
+
+
 ## Environment Setup Instructions
 
 This guide will walk you through the steps to set up your environment for the project.
