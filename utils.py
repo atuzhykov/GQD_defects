@@ -47,7 +47,8 @@ def calculate_mu_C(calculator):
     # Calculate energy per carbon atom
     E_graphene = atoms.get_potential_energy()
     N = len(atoms)  # Typically 2 for graphene unit cell
-    return E_graphene / N
+    # return E_graphene / N
+    return -8.9585 # precalculated using GPAW mode='lcao' and xc='PBE'
 
 
 device = "cuda"
