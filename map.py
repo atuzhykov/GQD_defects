@@ -812,7 +812,7 @@ if __name__ == "__main__":
         device = "cuda"
         orbff = pretrained.orb_v3_conservative_inf_omat(
             device=device,
-            precision="float32-high",  # or "float32-highest" / "float64
+            precision="float32-highest",  # or "float32-highest" / "float64
         )
         calc = ORBCalculator(orbff, device=device)
 
