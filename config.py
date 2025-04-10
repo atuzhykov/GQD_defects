@@ -23,5 +23,23 @@ molecules_data = {
     "QD_9": {
         "path": os.path.join("data", "QD_9.mol"),
         "cell": 39
+    },
+
+    "GQD_HEXAGON_3_3": {
+        "path": os.path.join("data", "GQD_HEXAGON_3_3.mol"),
+        "cell": 39
+    },
+
+    "GQD_HEXAGON_8_8": {
+        "path": os.path.join("data", "GQD_HEXAGON_8_8.mol"),
+        "cell": 62
+    },
+    "GQD_HEXAGON_3_3_func": {
+        "path": os.path.join("data", "GQD_HEXAGON_3_3_func.mol"),
+        "cell": 62
+    },
+    "GQD_HEXAGON_10_10_func": {
+        "path": os.path.join("data", "GQD_HEXAGON_10_10_func.mol"),
+        "cell": 62
     }
 }

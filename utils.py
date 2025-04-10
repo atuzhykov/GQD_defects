@@ -7,6 +7,57 @@ from ase.io import Trajectory
 from ase.optimize import FIRE
 from ase.io import read
 import numpy as np
+from orb_models.forcefield import pretrained
+from orb_models.forcefield.calculator import ORBCalculator
+
+
+def calculate_mu_C(calculator):
+    """
+    Calculate the chemical potential of carbon from perfect graphene.
+
+    Uses ASE's graphene builder to create a periodic graphene unit cell, relaxes it, and computes
+    the energy per carbon atom. This is used as mu_C in formation energy calculations to ensure
+    consistency with the carbon lattice, excluding edge effects from GQDs.
+    """
+    from ase.build import graphene
+    from ase.optimize import FIRE
+    import numpy as np
+
+    # Create graphene sheet
+    atoms = graphene()
+
+    # Explicitly set a 3D cell with vacuum in z-direction
+    vacuum = 15.0  # Adjust as needed (in Ångstroms)
+    cell = np.array([
+        [atoms.cell[0, 0], atoms.cell[0, 1], 0.0],
+        [atoms.cell[1, 0], atoms.cell[1, 1], 0.0],
+        [0.0, 0.0, vacuum]
+    ])
+    atoms.set_cell(cell)
+    atoms.center()  # Center atoms in the new cell
+    atoms.pbc = [True, True, True]  # Ensure 3D PBC
+
+    # Assign the calculator
+    atoms.set_calculator(calculator)
+
+    # Relax the structure
+    optimizer = FIRE(atoms)
+    optimizer.run(fmax=0.05)
+
+    # Calculate energy per carbon atom
+    E_graphene = atoms.get_potential_energy()
+    N = len(atoms)  # Typically 2 for graphene unit cell
+    return E_graphene / N
+
+
+device = "cuda"
+orbff = pretrained.orb_v3_conservative_inf_omat(
+    device=device,
+    precision="float32-high",  # or "float32-highest" / "float64
+)
+calc = ORBCalculator(orbff, device=device)
+MU_C = calculate_mu_C(calc)
+
 
 def delete_atom_by_idx(atoms, idx):
     """
@@ -112,21 +163,129 @@ def write_traj_xyz(traj_path, output_file):
                 f.write(f"{atom.symbol} {atom.position[0]} {atom.position[1]} {atom.position[2]}\n")
 
 
-def calculate_formation_energy(perfect, vacancy, calculator):
+
+def calculate_formation_energy(perfect, defective, calculator, mu_C):
     """
-    More accurate formation energy calculation
+    Calculate formation energy for defects in graphene quantum dots (GQDs).
+
+    This function computes the formation energy for various defects—single vacancies, divacancies,
+    and Stone-Wales (STW) defects—in GQDs. It is designed to be universal, handling cases where carbon
+    atoms are removed (vacancies/divacancies) or rearranged (STW), while accounting for edge
+    functional groups (e.g., H, O, N) by using a separately computed chemical potential of carbon
+    (mu_C) from perfect graphene.
+
+    Parameters:
+    - perfect: ASE Atoms object of the perfect GQD structure, including carbon atoms and any
+               functional groups at the edges.
+    - defective: ASE Atoms object of the defective GQD structure (e.g., with a vacancy, divacancy,
+                 or STW defect), also including functional groups.
+    - calculator: ASE calculator object (e.g., ORBCalculator), used to compute potential energies.
+    - mu_C: Chemical potential of carbon (in eV), calculated separately from a relaxed perfect
+            graphene structure (e.g., E_graphene / N_carbons), to avoid distortions from edge
+            functional groups in GQDs.
+
+    Returns:
+    - E_form: Formation energy of the defect (in eV), reflecting the energy cost of creating the
+              defect relative to the perfect structure.
+
+    Detailed Explanation:
+    --------------------
+    Formation energy (E_f) quantifies the energetic cost of introducing a defect into a material.
+    For GQDs, defects like vacancies (removal of one carbon), divacancies (removal of two carbons),
+    and Stone-Wales defects (bond rotation without atom removal) are common. The formula must
+    account for the finite size of GQDs and the presence of edge functional groups (e.g., H, O, N),
+    which differ energetically from carbon in ideal graphene.
+
+    The standard formation energy formula is derived from thermodynamics and statistical mechanics,
+    where the energy of a defective system is compared to the perfect system, adjusted by the
+    chemical potential of removed atoms. For GQDs, the literature suggests:
+
+    1. **Vacancies and Divacancies:**
+       - Formula: E_f = E_defective - E_perfect + n_removed * mu_C
+       - Here, n_removed is the number of carbon atoms removed (1 for vacancy, 2 for divacancy),
+         and mu_C is the chemical potential of carbon. This reflects the energy to create the defect
+         plus the energy of the removed carbon atoms relative to a reservoir (perfect graphene).
+       - Why mu_C from perfect graphene? Using mu_C from the GQD itself (e.g., E_perfect / total_atoms)
+         includes contributions from functional groups, which distorts the carbon-specific energy.
+         Perfect graphene provides a consistent reference for carbon’s chemical potential,
+         excluding edge effects.
+
+    2. **Stone-Wales Defects:**
+       - Formula: E_f = E_defective - E_perfect
+       - No atoms are removed (n_removed = 0), so the formation energy is simply the energy difference
+         due to bond rearrangement. No mu_C term is needed, as the defect involves only a structural
+         change.
+
+    3. **Implementation Choices:**
+       - **Counting Carbon Atoms:** The function counts only carbon atoms (symbol == 'C') to determine
+         n_removed, ensuring functional groups don’t affect the calculation. This is critical for
+         GQDs, where edge atoms (H, O, N) are present but not part of the defect process.
+       - **Separate mu_C:** mu_C is passed as a parameter, calculated from a perfect graphene
+         structure (e.g., using a function like calculate_mu_C). This aligns with best practices to
+         isolate carbon’s intrinsic energy.
+
+    Literature References:
+    ---------------------
+    - **Valencia, A. M., & Caldas, M. J. (2017). "Single vacancy defect in graphene: Insights into
+      its magnetic properties from theoretical modeling." Physical Review B, 96, 125431.**
+      - Uses E_f = E(C_{n-1}H_m) + E(carbon) - E(C_nH_m), where E(carbon) is the energy per carbon
+        in graphene, supporting mu_C from perfect graphene.
+      - Link: https://doi.org/10.1103/PhysRevB.96.125431 (Check via APS or institutional access)
+
+    - **Botello-Méndez, A. R., et al. (2011). "One-dimensional extended lines of divacancy defects
+      in graphene." Nanoscale, 3, 2868-2872.**
+      - Discusses divacancy formation in graphene, implying a similar approach with mu_C from the
+        pristine lattice for consistency in extended systems.
+      - Link: https://doi.org/10.1039/C1NR10229A (Check via RSC or institutional access)
+
+    - **Wang, C., & Ding, Y. (2013). "Catalytically healing the Stone-Wales defects in graphene by
+      carbon adatoms." Journal of Materials Chemistry A, 1, 1885-1891.**
+      - Uses E_f = E_S-W - E_perfect for STW defects, confirming the energy difference approach
+        when no atoms are removed.
+      - Link: https://doi.org/10.1039/C2TA00947A (Check via RSC or institutional access)
+
+    - **"Energetics of atomic scale structure changes in graphene." Chemical Society Reviews,
+      DOI:10.1039/C4CS00499J.**
+      - Generalizes E_f = E_d + n * mu - E_p, where mu is from perfect graphene, supporting this
+        formula for vacancies and divacancies.
+      - Link: https://doi.org/10.1039/C4CS00499J (Check via RSC or institutional access)
+
+    Why This Approach?
+    -----------------
+    - **Consistency Across Defects:** By checking n_removed, the function adapts to all defect types
+      without separate implementations, making it universal.
+    - **Edge Functional Groups:** Counting only carbon atoms ensures H, O, or N don’t skew results,
+      and using mu_C from graphene avoids their energetic influence, as discussed in prior analyses.
+    - **Literature Alignment:** The approach mirrors established methods in graphene defect studies,
+      ensuring comparability with published results.
+
+    Notes:
+    - Ensure the calculator (e.g., ORBCalculator) is consistent across perfect GQD, defective GQD,
+      and graphene calculations for mu_C.
+    - For edge defects involving functional group disruption, relaxation (via FIRE) should handle
+      structural changes, but the formula remains valid.
     """
     perfect.set_calculator(calculator)
-    vacancy.set_calculator(calculator)
+    defective.set_calculator(calculator)
 
     E_perfect = perfect.get_potential_energy()
-    E_vacancy = vacancy.get_potential_energy()
+    E_defective = defective.get_potential_energy()
 
-    # Chemical potential approach
-    mu_Si = E_perfect / len(perfect)
+    # Count number of carbon atoms
+    N_C_perfect = sum(1 for atom in perfect if atom.symbol == 'C')
+    N_C_defective = sum(1 for atom in defective if atom.symbol == 'C')
 
-    E_form = E_vacancy - (len(vacancy) * mu_Si)
+    n_removed = N_C_perfect - N_C_defective
+
+    if n_removed == 0:
+        # For Stone-Wales defect
+        E_form = E_defective - E_perfect
+    else:
+        # For vacancies and divacancies
+        E_form = E_defective - E_perfect + n_removed * mu_C
+
     return E_form
+
 
 
 def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, radius=8,
@@ -201,7 +360,7 @@ def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, ra
     write_traj_xyz(os.path.join(experiment_dir, 'core_trajectory.traj'),
                    os.path.join(experiment_dir, 'core_trajectory.xyz'))
 
-    formation_energy = calculate_formation_energy(atoms, modified_atoms, calc)
+    formation_energy = calculate_formation_energy(atoms, modified_atoms, calc, MU_C)
     with open(os.path.join(experiment_dir, "analysis_output.txt"), "w", encoding="utf-8") as file:
         file.write("Calculation Setup Analysis:\n")
         file.write(f"Formation Energy: {formation_energy:.3f} eV")

@@ -7,12 +7,17 @@ from orb_models.forcefield import pretrained
 from orb_models.forcefield.calculator import ORBCalculator
 from config import molecules_data
 from utils import rotate_bond_transform, delete_atoms_transform, move_atom_transform, get_distance, track_core_structure
-
+import torch
+torch.backends.cudnn.enabled = False
+torch._dynamo.config.suppress_errors = True
 # put True if you just want to see certain atoms indices, otherwise (for launch calculation, put False)
-DEBUG_MODE = True
+DEBUG_MODE = False
 
 device = "cuda"
-orbff = pretrained.orb_v2(device=device)
+orbff = pretrained.orb_v3_conservative_inf_omat(
+    device=device,
+    precision="float32-high",  # or "float32-highest" / "float64
+)
 calc = ORBCalculator(orbff, device=device)
 
 
@@ -20,7 +25,7 @@ calc = ORBCalculator(orbff, device=device)
 
 # ============= MOLECULE SETUP =============
 # Choose which molecule to work with from config.py
-molecule_name = "QD_7"
+molecule_name = "GQD_HEXAGON_10_10_func"
 mol_finename = molecules_data[molecule_name]["path"]
 cell = molecules_data[molecule_name]["cell"]
 
@@ -73,6 +78,7 @@ task_names = [
     "di_vacancy_transform",
     "split_vacancy_transform",
     "stw_transform"
+
 ]
 
 transforms_list = [
