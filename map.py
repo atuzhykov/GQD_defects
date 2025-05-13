@@ -14,7 +14,8 @@ from orb_models.forcefield.calculator import ORBCalculator
 from scipy import stats
 
 from config import molecules_data
-from utils import delete_atom_by_idx, rotate_bond_transform, calculate_formation_energy, MU_C
+from utils import delete_atom_by_idx, rotate_bond_transform, calculate_formation_energy, calculate_element_mu, \
+    determine_target_element
 
 import matplotlib as mpl
 # Set global font properties for all plots
@@ -61,7 +62,7 @@ def setup_structure(molecule_name):
     return base_relaxed, base_energy
 
 
-def analyze_vacancies(base_relaxed, base_energy, molecule_name, show_atom_idx=True):
+def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, show_atom_idx=True, excluded_atoms=[]):
     """Analyze single vacancy formation energies"""
     print("\n=== Running Vacancy Analysis ===\n")
     results_dir = f"vacancy_map_{molecule_name}"
@@ -74,7 +75,7 @@ def analyze_vacancies(base_relaxed, base_energy, molecule_name, show_atom_idx=Tr
     # Loop through each atom
     for atom_idx in range(len(base_relaxed)):
         # Skip non-carbon atoms
-        if base_relaxed[atom_idx].symbol != 'C':
+        if base_relaxed[atom_idx].symbol != target_element or atom_idx in excluded_atoms:
             continue
 
         print(f"Processing atom {atom_idx} of {len(base_relaxed)} (symbol: {base_relaxed[atom_idx].symbol})")
@@ -94,7 +95,8 @@ def analyze_vacancies(base_relaxed, base_energy, molecule_name, show_atom_idx=Tr
 
 
             # Calculate formation energy
-            formation_energy = calculate_formation_energy(base_relaxed, vacancy_atoms, calc, MU_C)
+
+            formation_energy = calculate_formation_energy(base_relaxed, vacancy_atoms, calc, element_mu)
 
             formation_energies.append(formation_energy)
             print(f"  Atom {atom_idx} formation energy: {formation_energy:.3f} eV")
@@ -109,7 +111,7 @@ def analyze_vacancies(base_relaxed, base_energy, molecule_name, show_atom_idx=Tr
     return atom_indices, formation_energies
 
 
-def analyze_divacancies(base_relaxed, base_energy, molecule_name, max_distance=1.5, show_atom_idx=True):
+def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, max_distance=1.5, show_atom_idx=True, excluded_atoms=[]):
     """Analyze divacancy formation energies"""
     print("\n=== Running Divacancy Analysis ===\n")
     results_dir = f"divacancy_map_{molecule_name}"
@@ -120,7 +122,7 @@ def analyze_divacancies(base_relaxed, base_energy, molecule_name, max_distance=1
     divacancy_pairs = []
 
     # Find all carbon atoms
-    carbon_indices = [i for i, atom in enumerate(base_relaxed) if atom.symbol == 'C']
+    carbon_indices = [i for i, atom in enumerate(base_relaxed) if atom.symbol == target_element and i not in excluded_atoms]
 
     # Create a list of potential divacancy pairs (filter by bond distance)
     potential_pairs = []
@@ -169,7 +171,7 @@ def analyze_divacancies(base_relaxed, base_energy, molecule_name, max_distance=1
     return divacancy_pairs, formation_energies
 
 
-def analyze_stone_wales(base_relaxed, base_energy, molecule_name, max_distance=1.8, show_atom_idx=True):
+def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name, max_distance=1.8, show_atom_idx=True, excluded_atoms=[]):
     """Analyze Stone-Wales transformation formation energies"""
     print("\n=== Running Stone-Wales Analysis ===\n")
     results_dir = f"stw_map_{molecule_name}"
@@ -180,7 +182,7 @@ def analyze_stone_wales(base_relaxed, base_energy, molecule_name, max_distance=1
     bond_pairs = []
 
     # Find all carbon atoms
-    carbon_indices = [i for i, atom in enumerate(base_relaxed) if atom.symbol == 'C']
+    carbon_indices = [i for i, atom in enumerate(base_relaxed) if atom.symbol == target_element and i not in excluded_atoms]
 
     # Create a list of potential bond pairs for rotation (filter by bond distance)
     potential_pairs = []
@@ -797,17 +799,31 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
 
 if __name__ == "__main__":
     # Configuration - modify these values directly
-    molecule_name = "GQD_HEXAGON_8_8"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
+    molecule_name = "si99"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
     defect_type = "vacancy"     # Choose 'vacancy', 'divacancy', 'stw', or 'all'
     show_atom_idx = True    # Set to False to hide atom indices in visualizations
-    div_dist = 1.5          # Maximum distance for divacancy consideration (Angstrom)
-    stw_dist = 1.8          # Maximum distance for Stone-Wales bond consideration (Angstrom)
-    DEBUG_MODE = False      # Set to True to enable debug mode (no calculations)
+    # Element-specific distances
+
+    DEBUG_MODE = True    # Set to True to enable debug mode (no calculations)
+    excluded_atoms = [] # List of atom indices to exclude from analysis
 
     if DEBUG_MODE:
         print("Debug mode enabled - no calculations will be performed")
         view(read(molecules_data[molecule_name]["path"]))
+        print("Atoms loaded. You can now inspect the structure.")
+        print("After inspection, you can specify atom indices to exclude from analysis.")
+
     else:
+        target_element, _ = determine_target_element(read(molecules_data[molecule_name]["path"]))
+        max_distances = {
+            'C': {'div': 1.5, 'stw': 1.8},
+            'Si': {'div': 2.3, 'stw': 2.6},
+            'Ge': {'div': 2.5, 'stw': 2.8}
+        }
+
+        # Set distances based on target element
+        div_dist = max_distances[target_element]['div']
+        stw_dist = max_distances[target_element]['stw']
         # GPU setup
         device = "cuda"
         orbff = pretrained.orb_v3_conservative_inf_omat(
@@ -815,20 +831,21 @@ if __name__ == "__main__":
             precision="float32-highest",  # or "float32-highest" / "float64
         )
         calc = ORBCalculator(orbff, device=device)
-
+        element_mu = calculate_element_mu(calc, target_element)
+        print(f"Chemical potential for {target_element}: {element_mu:.3f} eV")
         # Setup initial structure
         base_relaxed, base_energy = setup_structure(molecule_name)
 
         # Run selected analysis
         if defect_type == 'vacancy' or defect_type == 'all':
-            analyze_vacancies(base_relaxed, base_energy, molecule_name, show_atom_idx)
+            analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, show_atom_idx, excluded_atoms=excluded_atoms)
 
         if defect_type == 'divacancy' or defect_type == 'all':
-            analyze_divacancies(base_relaxed, base_energy, molecule_name,
-                               max_distance=div_dist, show_atom_idx=show_atom_idx)
+            analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name,
+                               max_distance=div_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms)
 
         if defect_type == 'stw' or defect_type == 'all':
-            analyze_stone_wales(base_relaxed, base_energy, molecule_name,
-                               max_distance=stw_dist, show_atom_idx=show_atom_idx)
+            analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name,
+                               max_distance=stw_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms)
 
         print("\nAnalysis complete!")

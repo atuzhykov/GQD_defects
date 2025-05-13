@@ -47,9 +47,83 @@ def calculate_mu_C(calculator):
     # Calculate energy per carbon atom
     E_graphene = atoms.get_potential_energy()
     N = len(atoms)  # Typically 2 for graphene unit cell
-    # return E_graphene / N
-    return -8.9585 # precalculated using GPAW mode='lcao' and xc='PBE'
+    return E_graphene / N
 
+def calculate_mu_Si(calculator):
+    """
+    Calculate the chemical potential of silicon from perfect diamond cubic silicon.
+
+    Uses ASE's bulk builder to create a periodic silicon unit cell, relaxes it, and computes
+    the energy per silicon atom. This is used as mu_Si in formation energy calculations to ensure
+    consistency with the silicon lattice.
+    """
+    from ase.build import bulk
+    from ase.optimize import FIRE
+    import numpy as np
+
+    # Create silicon crystal (diamond cubic structure)
+    atoms = bulk('Si', 'diamond', a=5.43)  # 5.43 Å is the lattice constant for Si
+
+    # Assign the calculator
+    atoms.set_calculator(calculator)
+
+    # Relax the structure
+    optimizer = FIRE(atoms)
+    optimizer.run(fmax=0.05)
+
+    # Calculate energy per silicon atom
+    E_silicon = atoms.get_potential_energy()
+    N = len(atoms)  # Number of atoms in the unit cell
+    return E_silicon / N
+
+
+def calculate_mu_Ge(calculator):
+    """
+    Calculate the chemical potential of germanium from perfect diamond cubic germanium.
+
+    Uses ASE's bulk builder to create a periodic germanium unit cell, relaxes it, and computes
+    the energy per germanium atom. This is used as mu_Ge in formation energy calculations to ensure
+    consistency with the germanium lattice.
+    """
+    from ase.build import bulk
+    from ase.optimize import FIRE
+    import numpy as np
+
+    # Create germanium crystal (diamond cubic structure)
+    atoms = bulk('Ge', 'diamond', a=5.658)  # 5.658 Å is the lattice constant for Ge
+
+    # Assign the calculator
+    atoms.set_calculator(calculator)
+
+    # Relax the structure
+    optimizer = FIRE(atoms)
+    optimizer.run(fmax=0.05)
+
+    # Calculate energy per germanium atom
+    E_germanium = atoms.get_potential_energy()
+    N = len(atoms)  # Number of atoms in the unit cell
+    return E_germanium / N
+
+
+def calculate_element_mu(calculator, element='C'):
+    """
+    Calculate the chemical potential of the specified element from its perfect crystal structure.
+
+    Args:
+        calculator: ASE calculator to use for energy calculations
+        element: Chemical symbol of the element ('C', 'Si', or 'Ge')
+
+    Returns:
+        Chemical potential (energy per atom) of the specified element
+    """
+    if element == 'C':
+        return calculate_mu_C(calculator)
+    elif element == 'Si':
+        return calculate_mu_Si(calculator)
+    elif element == 'Ge':
+        return calculate_mu_Ge(calculator)
+    else:
+        raise ValueError(f"Unsupported element: {element}. Must be one of: C, Si, Ge")
 
 device = "cuda"
 orbff = pretrained.orb_v3_conservative_inf_omat(
@@ -58,7 +132,6 @@ orbff = pretrained.orb_v3_conservative_inf_omat(
 )
 calc = ORBCalculator(orbff, device=device)
 MU_C = calculate_mu_C(calc)
-
 
 def delete_atom_by_idx(atoms, idx):
     """
@@ -423,3 +496,40 @@ def rotate_bond_transform(atom1_idx, atom2_idx, angle_degrees=90):
         return modified_atoms
 
     return transform
+
+
+def determine_target_element(atoms):
+    """
+    Determine the most common element in an ASE Atoms object.
+
+    Parameters:
+    -----------
+    atoms : ase.Atoms
+        ASE Atoms object representing a molecular structure
+
+    Returns:
+    --------
+    str
+        Chemical symbol of the most common element
+    dict
+        Element counts dictionary
+    """
+    from collections import Counter
+
+    # Get chemical symbols of all atoms
+    symbols = atoms.get_chemical_symbols()
+
+    # Count occurrences of each element
+    element_counts = Counter(symbols)
+
+    # Find the most common element
+    most_common_element = element_counts.most_common(1)[0][0]
+
+    print(f"Structure analysis:")
+    print(f"Total number of atoms: {len(atoms)}")
+    print("Element counts:")
+    for element, count in element_counts.items():
+        print(f"  {element}: {count} ({count / len(atoms) * 100:.1f}%)")
+    print(f"Most common element: {most_common_element}")
+
+    return most_common_element, dict(element_counts)
