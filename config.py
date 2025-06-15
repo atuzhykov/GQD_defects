@@ -41,5 +41,10 @@ molecules_data = {
     "GQD_HEXAGON_10_10_func": {
         "path": os.path.join("data", "GQD_HEXAGON_10_10_func.mol"),
         "cell": 62
+    },
+
+    "elementary": {
+        "path": os.path.join("data", "elementary.mol"),
+        "cell": 62
     }
 }

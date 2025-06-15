@@ -65,7 +65,7 @@ def setup_structure(molecule_name):
 def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, show_atom_idx=True, excluded_atoms=[]):
     """Analyze single vacancy formation energies"""
     print("\n=== Running Vacancy Analysis ===\n")
-    results_dir = f"vacancy_map_{molecule_name}"
+    results_dir = f"vacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
     os.makedirs(results_dir, exist_ok=True)
 
     # Initialize lists to store results
@@ -114,7 +114,7 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
 def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, max_distance=1.5, show_atom_idx=True, excluded_atoms=[]):
     """Analyze divacancy formation energies"""
     print("\n=== Running Divacancy Analysis ===\n")
-    results_dir = f"divacancy_map_{molecule_name}"
+    results_dir = f"divacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
     os.makedirs(results_dir, exist_ok=True)
 
     # Initialize lists to store results
@@ -174,7 +174,7 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
 def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name, max_distance=1.8, show_atom_idx=True, excluded_atoms=[]):
     """Analyze Stone-Wales transformation formation energies"""
     print("\n=== Running Stone-Wales Analysis ===\n")
-    results_dir = f"stw_map_{molecule_name}"
+    results_dir = f"stw_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
     os.makedirs(results_dir, exist_ok=True)
 
     # Initialize lists to store results
@@ -816,7 +816,7 @@ if __name__ == "__main__":
     else:
         target_element, _ = determine_target_element(read(molecules_data[molecule_name]["path"]))
         max_distances = {
-            'C': {'div': 1.5, 'stw': 1.8},
+            'C': {'div': 1.7, 'stw': 1.8},
             'Si': {'div': 2.3, 'stw': 2.6},
             'Ge': {'div': 2.5, 'stw': 2.8}
         }
@@ -849,3 +849,5 @@ if __name__ == "__main__":
                                max_distance=stw_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms)
 
         print("\nAnalysis complete!")
+
+    
