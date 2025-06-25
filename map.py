@@ -799,12 +799,12 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
 
 if __name__ == "__main__":
     # Configuration - modify these values directly
-    molecule_name = "si99"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
-    defect_type = "vacancy"     # Choose 'vacancy', 'divacancy', 'stw', or 'all'
+    molecule_name = "elementary"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
+    defect_type = "all"     # Choose 'vacancy', 'divacancy', 'stw', or 'all'
     show_atom_idx = True    # Set to False to hide atom indices in visualizations
     # Element-specific distances
 
-    DEBUG_MODE = True    # Set to True to enable debug mode (no calculations)
+    DEBUG_MODE = False    # Set to True to enable debug mode (no calculations)
     excluded_atoms = [] # List of atom indices to exclude from analysis
 
     if DEBUG_MODE:
@@ -824,13 +824,14 @@ if __name__ == "__main__":
         # Set distances based on target element
         div_dist = max_distances[target_element]['div']
         stw_dist = max_distances[target_element]['stw']
-        # GPU setup
-        device = "cuda"
-        orbff = pretrained.orb_v3_conservative_inf_omat(
-            device=device,
-            precision="float32-highest",  # or "float32-highest" / "float64
-        )
-        calc = ORBCalculator(orbff, device=device)
+
+        from sevenn.calculator import SevenNetCalculator
+
+
+        # "mpa" refers to the MPtrj + sAlex modal, used for evaluating Matbench Discovery.
+        calc = SevenNetCalculator('7net-l3i5', modal='mpa')
+
+
         element_mu = calculate_element_mu(calc, target_element)
         print(f"Chemical potential for {target_element}: {element_mu:.3f} eV")
         # Setup initial structure

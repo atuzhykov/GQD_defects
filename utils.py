@@ -125,14 +125,6 @@ def calculate_element_mu(calculator, element='C'):
     else:
         raise ValueError(f"Unsupported element: {element}. Must be one of: C, Si, Ge")
 
-device = "cuda"
-orbff = pretrained.orb_v3_conservative_inf_omat(
-    device=device,
-    precision="float32-highest",  # or "float32-highest" / "float64
-)
-calc = ORBCalculator(orbff, device=device)
-MU_C = calculate_mu_C(calc)
-
 def delete_atom_by_idx(atoms, idx):
     """
     Delete atom by index from ASE Atoms object
