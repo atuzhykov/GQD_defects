@@ -1,23 +1,22 @@
 import os
 from itertools import combinations
-import torch
-torch.backends.cudnn.enabled = False
-torch._dynamo.config.suppress_errors = True
+
+import matplotlib as mpl
+# import torch
+# torch.backends.cudnn.enabled = False
+# torch._dynamo.config.suppress_errors = True
 import matplotlib.pyplot as plt
 import numpy as np
 from ase.io import read
-from ase.optimize import FIRE
+from ase.optimize import BFGS
 from ase.visualize import view
 from matplotlib.colors import LinearSegmentedColormap
-from orb_models.forcefield import pretrained
-from orb_models.forcefield.calculator import ORBCalculator
 from scipy import stats
 
 from config import molecules_data
 from utils import delete_atom_by_idx, rotate_bond_transform, calculate_formation_energy, calculate_element_mu, \
     determine_target_element
 
-import matplotlib as mpl
 # Set global font properties for all plots
 mpl.rcParams['font.family'] = 'Times New Roman'
 mpl.rcParams['font.size'] = 12
@@ -50,8 +49,8 @@ def setup_structure(molecule_name):
 
     # Perform initial relaxation
     print("Relaxing base structure...")
-    optimizer = FIRE(atoms)
-    optimizer.run(fmax=0.05)
+    optimizer = BFGS(atoms)
+    optimizer.run(fmax=0.1)
 
     # Get base energy
     base_relaxed = atoms.copy()
@@ -90,7 +89,7 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
 
             # Relax the vacancy structure
             print(f"  Relaxing vacancy structure...")
-            optimizer = FIRE(vacancy_atoms)
+            optimizer = BFGS(vacancy_atoms)
             optimizer.run(fmax=0.05)
 
 
@@ -147,7 +146,7 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
 
             # Relax the divacancy structure
             print(f"  Relaxing divacancy structure...")
-            optimizer = FIRE(divacancy_atoms)
+            optimizer = BFGS(divacancy_atoms)
             optimizer.run(fmax=0.05)
 
             # Get divacancy energy
@@ -211,7 +210,7 @@ def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name
 
             # Relax the STW structure
             print(f"  Relaxing Stone-Wales structure...")
-            optimizer = FIRE(stw_atoms)
+            optimizer = BFGS(stw_atoms)
             optimizer.run(fmax=0.05)
 
             # Get STW energy
@@ -799,7 +798,7 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
 
 if __name__ == "__main__":
     # Configuration - modify these values directly
-    molecule_name = "elementary"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
+    molecule_name = "QD_1"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
     defect_type = "all"     # Choose 'vacancy', 'divacancy', 'stw', or 'all'
     show_atom_idx = True    # Set to False to hide atom indices in visualizations
     # Element-specific distances
@@ -825,12 +824,28 @@ if __name__ == "__main__":
         div_dist = max_distances[target_element]['div']
         stw_dist = max_distances[target_element]['stw']
 
-        from sevenn.calculator import SevenNetCalculator
-
+        # from sevenn.calculator import SevenNetCalculator
 
         # "mpa" refers to the MPtrj + sAlex modal, used for evaluating Matbench Discovery.
-        calc = SevenNetCalculator('7net-l3i5', modal='mpa')
+        # calc = SevenNetCalculator('7net-l3i5', modal='mpa')
+        from gpaw import GPAW, PW, FermiDirac
 
+        calc = GPAW(
+            xc='PBE',
+            mode=PW(300),  # Reduced from 400 - still reasonable for C-C bond breaking
+            kpts=(1, 1, 1),
+            symmetry='off',
+            spinpol=True,  # Keep this - essential for radicals
+            occupations=FermiDirac(0.05),  # Increased smearing - faster SCF convergence
+            convergence={
+                'energy': 0.001,  # Relaxed from 0.0005 (1 meV is fine for formation energies)
+                'density': 1e-4,  # Much looser - 1e-6 is overkill
+                'eigenstates': 1e-6,  # Looser from 1e-8
+            },
+            mixer={'backend': 'pulay', 'beta': 0.1, 'nmaxold': 5, 'weight': 50},  # Faster mixing
+            maxiter=300,  # Explicit limit to catch non-convergence earlier
+            txt='calculation.txt',
+        )
 
         element_mu = calculate_element_mu(calc, target_element)
         print(f"Chemical potential for {target_element}: {element_mu:.3f} eV")

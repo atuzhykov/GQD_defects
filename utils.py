@@ -1,14 +1,11 @@
 import datetime
 import os
 
-import ase
+import numpy as np
 from ase.constraints import FixAtoms
 from ase.io import Trajectory
-from ase.optimize import FIRE
 from ase.io import read
-import numpy as np
-from orb_models.forcefield import pretrained
-from orb_models.forcefield.calculator import ORBCalculator
+from ase.optimize import FIRE
 
 
 def calculate_mu_C(calculator):
@@ -23,31 +20,32 @@ def calculate_mu_C(calculator):
     from ase.optimize import FIRE
     import numpy as np
 
-    # Create graphene sheet
-    atoms = graphene()
-
-    # Explicitly set a 3D cell with vacuum in z-direction
-    vacuum = 15.0  # Adjust as needed (in Ångstroms)
-    cell = np.array([
-        [atoms.cell[0, 0], atoms.cell[0, 1], 0.0],
-        [atoms.cell[1, 0], atoms.cell[1, 1], 0.0],
-        [0.0, 0.0, vacuum]
-    ])
-    atoms.set_cell(cell)
-    atoms.center()  # Center atoms in the new cell
-    atoms.pbc = [True, True, True]  # Ensure 3D PBC
-
-    # Assign the calculator
-    atoms.set_calculator(calculator)
-
-    # Relax the structure
-    optimizer = FIRE(atoms)
-    optimizer.run(fmax=0.05)
-
-    # Calculate energy per carbon atom
-    E_graphene = atoms.get_potential_energy()
-    N = len(atoms)  # Typically 2 for graphene unit cell
-    return E_graphene / N
+    # # Create graphene sheet
+    # atoms = graphene()
+    #
+    # # Explicitly set a 3D cell with vacuum in z-direction
+    # vacuum = 15.0  # Adjust as needed (in Ångstroms)
+    # cell = np.array([
+    #     [atoms.cell[0, 0], atoms.cell[0, 1], 0.0],
+    #     [atoms.cell[1, 0], atoms.cell[1, 1], 0.0],
+    #     [0.0, 0.0, vacuum]
+    # ])
+    # atoms.set_cell(cell)
+    # atoms.center()  # Center atoms in the new cell
+    # atoms.pbc = [True, True, True]  # Ensure 3D PBC
+    #
+    # # Assign the calculator
+    # atoms.set_calculator(calculator)
+    #
+    # # Relax the structure
+    # optimizer = FIRE(atoms)
+    # optimizer.run(fmax=0.05)
+    #
+    # # Calculate energy per carbon atom
+    # E_graphene = atoms.get_potential_energy()
+    # N = len(atoms)  # Typically 2 for graphene unit cell
+    # return E_graphene / N
+    return -9.214
 
 def calculate_mu_Si(calculator):
     """
@@ -59,7 +57,6 @@ def calculate_mu_Si(calculator):
     """
     from ase.build import bulk
     from ase.optimize import FIRE
-    import numpy as np
 
     # Create silicon crystal (diamond cubic structure)
     atoms = bulk('Si', 'diamond', a=5.43)  # 5.43 Å is the lattice constant for Si
@@ -87,7 +84,6 @@ def calculate_mu_Ge(calculator):
     """
     from ase.build import bulk
     from ase.optimize import FIRE
-    import numpy as np
 
     # Create germanium crystal (diamond cubic structure)
     atoms = bulk('Ge', 'diamond', a=5.658)  # 5.658 Å is the lattice constant for Ge
