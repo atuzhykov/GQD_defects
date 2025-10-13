@@ -745,7 +745,7 @@ def main():
 
         print(f"\n{'=' * 60}")
         print(f"Analysis complete!")
-        print(f"Results saved to: doping_map_{molecule_name}_{dopant_element}_GPAW/")
+        print(f"Results saved to: doping_map_{molecule_name}_{dopant_element}/")
         print(f"  - formation_energy_map.png: Visual energy map")
         print(f"  - energy_distribution.png: Statistical distribution")
         print(f"  - summary.txt: Detailed statistics")
