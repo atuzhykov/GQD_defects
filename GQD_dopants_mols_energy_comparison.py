@@ -724,8 +724,8 @@ def main():
         print("\n2. NEW MODE - Automated Doping Site Analysis:")
 
         # Configuration
-        molecule_name = "QD_1"  # Choose which molecule to analyze
-        dopant_element = "P"   # Choose dopant: 'Li', 'N', 'B', 'P', 'S', 'O', 'F'
+        molecule_name = "GQD_TRIANGLE_3"  # Choose which molecule to analyze
+        dopant_element = "N"   # Choose dopant: 'Li', 'N', 'B', 'P', 'S', 'O', 'F'
         show_atom_idx = True    # Show atom indices on plots
         excluded_atoms = []     # Optionally exclude specific atoms
         replace_H = False       # Set True to also analyze H replacement (wider energy map)

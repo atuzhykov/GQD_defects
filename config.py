@@ -43,8 +43,8 @@ molecules_data = {
         "cell": 62
     },
 
-    "elementary": {
-        "path": os.path.join("data", "elementary.mol"),
-        "cell": 62
+    "GQD_TRIANGLE_3": {
+        "path": os.path.join("data", "GQD_TRIANGLE_3.mol"),
+        "cell": 15
     }
 }
