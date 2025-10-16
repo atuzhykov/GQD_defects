@@ -46,5 +46,12 @@ molecules_data = {
     "GQD_TRIANGLE_3": {
         "path": os.path.join("data", "GQD_TRIANGLE_3.mol"),
         "cell": 15
-    }
+    },
+    "GQD_TRIANGLE_3_nh2_cooh_oh": {
+        "path": os.path.join("data", "GQD_TRIANGLE_3_nh2_cooh_oh.mol"),
+        "cell": 15},
+    "GQD_TRIANGLE_3_nh2_cooh_oh_o": {
+        "path": os.path.join("data", "GQD_TRIANGLE_3_nh2_cooh_oh_o.mol"),
+        "cell": 15}
+
 }

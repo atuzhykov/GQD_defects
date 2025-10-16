@@ -201,7 +201,7 @@ class FormationEnergyCalculator:
             forces: Atomic forces for validation [eV/Å]
         """
         # Load molecular structure from computational database
-        atoms = read(molecules_data[mol_key]["mol_path"])
+        atoms = read(molecules_data[mol_key]["path"])
         atoms.calc = self.calc  # Attach quantum mechanical calculator
 
         # Geometry optimization using BFGS algorithm
@@ -244,7 +244,7 @@ class FormationEnergyCalculator:
 
         def get_composition(mol_key):
             """Extract atomic composition from molecular structure."""
-            atoms = read(molecules_data[mol_key]["mol_path"])
+            atoms = read(molecules_data[mol_key]["path"])
             comp = {}
             for symbol in atoms.get_chemical_symbols():
                 comp[symbol] = comp.get(symbol, 0) + 1
@@ -1010,7 +1010,7 @@ def main():
     # ============================================================
     # CONFIGURATION
     # ============================================================
-    mode = "automated"  # "legacy" or "automated"
+    mode = "legacy"  # "legacy" or "automated"
 
     # ============================================================
     # MODE 1: Legacy - Compare pre-existing functionalized molecules
@@ -1021,7 +1021,7 @@ def main():
         #  Groups autodetect:  NH2, OH, COOH
         result = calculator.calculate_formation_energy(
             pristine_key="GQD_TRIANGLE_3",  # Clean graphene quantum dot
-            modified_key="GQD_TRIANGLE_3_NH2"  # functionalized GQD
+            modified_key="GQD_TRIANGLE_3_nh2_cooh_oh_o"  # functionalized GQD
         )
 
         print(f"\n{'=' * 50}")

@@ -184,7 +184,7 @@ class DopingFormationCalculator:
             return self.energy_cache[mol_key]
 
         # Load structure
-        atoms = read(molecules_data[mol_key]["mol_path"])
+        atoms = read(molecules_data[mol_key]["path"])
         atoms.calc = self.calc
 
         # Geometry optimization
@@ -219,8 +219,8 @@ class DopingFormationCalculator:
             Dictionary with dopant information
         """
         # Load structures
-        pristine = read(molecules_data[pristine_key]["mol_path"])
-        doped = read(molecules_data[doped_key]["mol_path"])
+        pristine = read(molecules_data[pristine_key]["path"])
+        doped = read(molecules_data[doped_key]["path"])
 
         # Get compositions
         comp_pristine = self._get_composition(pristine)
@@ -725,7 +725,7 @@ def main():
 
         # Configuration
         molecule_name = "GQD_TRIANGLE_3"  # Choose which molecule to analyze
-        dopant_element = "N"   # Choose dopant: 'Li', 'N', 'B', 'P', 'S', 'O', 'F'
+        dopant_element = "B"   # Choose dopant: 'Li', 'N', 'B', 'P', 'S', 'O', 'F'
         show_atom_idx = True    # Show atom indices on plots
         excluded_atoms = []     # Optionally exclude specific atoms
         replace_H = False       # Set True to also analyze H replacement (wider energy map)
