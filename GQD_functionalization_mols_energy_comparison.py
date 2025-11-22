@@ -327,7 +327,7 @@ class FormationEnergyCalculator:
             if count != 0:
                 groups[f"{elem}_atom"] = count
                 if count > 0:
-                    logger.warning(f"Unmatched atoms (likely adsorbed): {count} {elem}")
+                    logger.warning(f"GQD_functionalization_mols_energy_comparison.py (likely adsorbed): {count} {elem}")
                 else:
                     logger.warning(f"Missing atoms (likely vacancy): {abs(count)} {elem}")
 
@@ -1018,7 +1018,7 @@ def main():
     if mode == "legacy":
         print("\n1. LEGACY MODE - Pre-existing functionalized GQD:")
 
-        #  Groups autodetect:  NH2, OH, COOH
+        #  Groups autodetect:  NH2, OH,exp COOH
         result = calculator.calculate_formation_energy(
             pristine_key="GQD_TRIANGLE_3",  # Clean graphene quantum dot
             modified_key="GQD_TRIANGLE_3_nh2_cooh_oh_o"  # functionalized GQD

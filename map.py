@@ -1,4 +1,6 @@
 import os
+import platform
+import shutil
 from itertools import combinations
 
 import matplotlib as mpl
@@ -7,9 +9,10 @@ import matplotlib as mpl
 # torch._dynamo.config.suppress_errors = True
 import matplotlib.pyplot as plt
 import numpy as np
-from ase.io import read
+from ase.io import read, write
 from ase.optimize import BFGS
 from ase.visualize import view
+from ase.visualize.plot import plot_atoms
 from matplotlib.colors import LinearSegmentedColormap
 from scipy import stats
 
@@ -28,6 +31,27 @@ mpl.rcParams['xtick.labelsize'] = 12  # X-axis tick labels
 mpl.rcParams['ytick.labelsize'] = 12  # Y-axis tick labels
 mpl.rcParams['legend.fontsize'] = 12  # Legend text
 mpl.rcParams['figure.titlesize'] = 18  # Figure titles
+
+
+def save_structure_image(atoms, filepath, title="Structure", show_atom_idx=True):
+    """Save an image of the atomic structure using ASE's plot_atoms"""
+    try:
+        fig, ax = plt.subplots(figsize=(8, 8))
+        plot_atoms(atoms, ax, rotation=('0x,0y,0z'))
+        ax.set_title(title)
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+    except Exception as e:
+        print(f"  Warning: Could not generate image: {e}")
+        # Close figure to avoid memory leaks
+        plt.close('all')
+
+
+def save_structure_file(atoms, filepath):
+    """Save atomic structure to file (mol, xyz, or other formats based on extension)"""
+    write(filepath, atoms)
+
+
 def setup_structure(molecule_name):
     """Set up and relax the initial structure"""
     # Get parameters from config
@@ -67,6 +91,16 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
     results_dir = f"vacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
     os.makedirs(results_dir, exist_ok=True)
 
+    # Create subdirectories for structures and images
+    structures_dir = os.path.join(results_dir, "relaxed_structures")
+    images_dir = os.path.join(results_dir, "structure_images")
+    os.makedirs(structures_dir, exist_ok=True)
+    os.makedirs(images_dir, exist_ok=True)
+
+    # Copy input file to results directory
+    input_file = molecules_data[molecule_name]["path"]
+    shutil.copy(input_file, os.path.join(results_dir, f"input_{os.path.basename(input_file)}"))
+
     # Initialize lists to store results
     formation_energies = []
     atom_indices = []
@@ -92,13 +126,22 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
             optimizer = BFGS(vacancy_atoms)
             optimizer.run(fmax=0.05)
 
-
             # Calculate formation energy
-
             formation_energy = calculate_formation_energy(base_relaxed, vacancy_atoms, calc, element_mu)
 
             formation_energies.append(formation_energy)
             print(f"  Atom {atom_idx} formation energy: {formation_energy:.3f} eV")
+
+            # Save relaxed structure and image
+            structure_file = os.path.join(structures_dir, f"vacancy_atom_{atom_idx}.xyz")
+            image_file = os.path.join(images_dir, f"vacancy_atom_{atom_idx}.png")
+
+            save_structure_file(vacancy_atoms, structure_file)
+            save_structure_image(vacancy_atoms, image_file,
+                               title=f"Vacancy at atom {atom_idx}\nE_form = {formation_energy:.3f} eV",
+                               show_atom_idx=show_atom_idx)
+            print(f"  Saved structure to {structure_file}")
+            print(f"  Saved image to {image_file}")
 
         except Exception as e:
             print(f"  Error processing atom {atom_idx}: {e}")
@@ -115,6 +158,16 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
     print("\n=== Running Divacancy Analysis ===\n")
     results_dir = f"divacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
     os.makedirs(results_dir, exist_ok=True)
+
+    # Create subdirectories for structures and images
+    structures_dir = os.path.join(results_dir, "relaxed_structures")
+    images_dir = os.path.join(results_dir, "structure_images")
+    os.makedirs(structures_dir, exist_ok=True)
+    os.makedirs(images_dir, exist_ok=True)
+
+    # Copy input file to results directory
+    input_file = molecules_data[molecule_name]["path"]
+    shutil.copy(input_file, os.path.join(results_dir, f"input_{os.path.basename(input_file)}"))
 
     # Initialize lists to store results
     formation_energies = []
@@ -159,6 +212,17 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
             formation_energies.append(formation_energy)
             print(f"  Divacancy {atom_idx1}-{atom_idx2} formation energy: {formation_energy:.3f} eV")
 
+            # Save relaxed structure and image
+            structure_file = os.path.join(structures_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.xyz")
+            image_file = os.path.join(images_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.png")
+
+            save_structure_file(divacancy_atoms, structure_file)
+            save_structure_image(divacancy_atoms, image_file,
+                               title=f"Divacancy at atoms {atom_idx1}-{atom_idx2}\nE_form = {formation_energy:.3f} eV",
+                               show_atom_idx=show_atom_idx)
+            print(f"  Saved structure to {structure_file}")
+            print(f"  Saved image to {image_file}")
+
         except Exception as e:
             print(f"  Error processing divacancy {atom_idx1}-{atom_idx2}: {e}")
             formation_energies.append(None)
@@ -175,6 +239,16 @@ def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name
     print("\n=== Running Stone-Wales Analysis ===\n")
     results_dir = f"stw_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
     os.makedirs(results_dir, exist_ok=True)
+
+    # Create subdirectories for structures and images
+    structures_dir = os.path.join(results_dir, "relaxed_structures")
+    images_dir = os.path.join(results_dir, "structure_images")
+    os.makedirs(structures_dir, exist_ok=True)
+    os.makedirs(images_dir, exist_ok=True)
+
+    # Copy input file to results directory
+    input_file = molecules_data[molecule_name]["path"]
+    shutil.copy(input_file, os.path.join(results_dir, f"input_{os.path.basename(input_file)}"))
 
     # Initialize lists to store results
     formation_energies = []
@@ -221,6 +295,17 @@ def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name
 
             formation_energies.append(formation_energy)
             print(f"  Stone-Wales {atom_idx1}-{atom_idx2} formation energy: {formation_energy:.3f} eV")
+
+            # Save relaxed structure and image
+            structure_file = os.path.join(structures_dir, f"stw_bond_{atom_idx1}_{atom_idx2}.xyz")
+            image_file = os.path.join(images_dir, f"stw_bond_{atom_idx1}_{atom_idx2}.png")
+
+            save_structure_file(stw_atoms, structure_file)
+            save_structure_image(stw_atoms, image_file,
+                               title=f"Stone-Wales defect at bond {atom_idx1}-{atom_idx2}\nE_form = {formation_energy:.3f} eV",
+                               show_atom_idx=show_atom_idx)
+            print(f"  Saved structure to {structure_file}")
+            print(f"  Saved image to {image_file}")
 
         except Exception as e:
             print(f"  Error processing Stone-Wales {atom_idx1}-{atom_idx2}: {e}")
@@ -273,6 +358,28 @@ def _process_vacancy_results(results_dir, base_relaxed, atom_indices, formation_
         # Plot the structure with atoms colored by formation energy
         fig, ax = plt.subplots(figsize=(12, 10))
 
+        # First, draw connections from vacancy sites to their neighbors
+        max_bond_distance = 1.8  # Standard C-C bond distance threshold
+        for idx in atom_indices:
+            if idx in energy_map and energy_map[idx] is not None:
+                # Find neighboring atoms within bonding distance
+                pos_vacancy = base_relaxed.positions[idx]
+
+                # Normalize energy for coloring
+                norm_energy = (energy_map[idx] - min_energy) / (
+                            max_energy - min_energy) if max_energy > min_energy else 0.5
+                color = cmap(norm_energy)
+
+                # Draw lines to all neighboring atoms
+                for neighbor_idx, neighbor_atom in enumerate(base_relaxed):
+                    if neighbor_idx != idx:
+                        distance = base_relaxed.get_distance(idx, neighbor_idx)
+                        if distance <= max_bond_distance:
+                            pos_neighbor = base_relaxed.positions[neighbor_idx]
+                            ax.plot([pos_vacancy[0], pos_neighbor[0]],
+                                   [pos_vacancy[1], pos_neighbor[1]],
+                                   color=color, linewidth=2.5, alpha=0.7, zorder=5)
+
         # Plot atoms colored by formation energy
         for i, atom in enumerate(base_relaxed):
             if i in energy_map and energy_map[i] is not None:
@@ -284,12 +391,14 @@ def _process_vacancy_results(results_dir, base_relaxed, atom_indices, formation_
                 # Gray for non-carbon atoms or failed calculations
                 color = 'gray'
 
-            ax.scatter(atom.position[0], atom.position[1], c=color, s=100,
-                       edgecolors='black', linewidths=1)
+            # Hydrogen atoms should be smaller
+            marker_size = 50 if atom.symbol == 'H' else 100
+            ax.scatter(atom.position[0], atom.position[1], c=color, s=marker_size,
+                       edgecolors='black', linewidths=1, zorder=10)
 
             # Add atom index for reference if enabled
             if show_atom_idx:
-                ax.text(atom.position[0], atom.position[1], str(i), fontsize=8)
+                ax.text(atom.position[0], atom.position[1], str(i), fontsize=8, zorder=15)
 
         # Create colorbar
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(min_energy, max_energy))
@@ -419,7 +528,9 @@ def _process_divacancy_results(results_dir, base_relaxed, divacancy_pairs, forma
 
         # Plot all atoms first as gray circles
         for i, atom in enumerate(base_relaxed):
-            ax.scatter(atom.position[0], atom.position[1], c='lightgray', s=100,
+            # Hydrogen atoms should be smaller
+            marker_size = 50 if atom.symbol == 'H' else 100
+            ax.scatter(atom.position[0], atom.position[1], c='lightgray', s=marker_size,
                        edgecolors='black', linewidths=1)
             # Add atom index for reference if enabled
             if show_atom_idx:
@@ -464,7 +575,9 @@ def _process_divacancy_results(results_dir, base_relaxed, divacancy_pairs, forma
 
         # Plot all atoms first as gray circles
         for i, atom in enumerate(base_relaxed):
-            ax2.scatter(atom.position[0], atom.position[1], c='lightgray', s=100,
+            # Hydrogen atoms should be smaller
+            marker_size = 50 if atom.symbol == 'H' else 100
+            ax2.scatter(atom.position[0], atom.position[1], c='lightgray', s=marker_size,
                         edgecolors='black', linewidths=1)
             # Add atom index for reference if enabled
             if show_atom_idx:
@@ -620,7 +733,9 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
 
         # Plot all atoms first
         for i, atom in enumerate(base_relaxed):
-            ax.scatter(atom.position[0], atom.position[1], c='lightgray', s=100,
+            # Hydrogen atoms should be smaller
+            marker_size = 50 if atom.symbol == 'H' else 100
+            ax.scatter(atom.position[0], atom.position[1], c='lightgray', s=marker_size,
                        edgecolors='black', linewidths=1)
             # Add atom index for reference if enabled
             if show_atom_idx:
@@ -674,7 +789,9 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
 
         # Plot all atoms first
         for i, atom in enumerate(base_relaxed):
-            ax2.scatter(atom.position[0], atom.position[1], c='lightgray', s=100,
+            # Hydrogen atoms should be smaller
+            marker_size = 50 if atom.symbol == 'H' else 100
+            ax2.scatter(atom.position[0], atom.position[1], c='lightgray', s=marker_size,
                         edgecolors='black', linewidths=1)
             # Add atom index for reference if enabled
             if show_atom_idx:
@@ -798,10 +915,12 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
 
 if __name__ == "__main__":
     # Configuration - modify these values directly
-    molecule_name = "QD_1"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
+    molecule_name = "GQD_HEXAGON_3_3"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
     defect_type = "all"     # Choose 'vacancy', 'divacancy', 'stw', or 'all'
     show_atom_idx = True    # Set to False to hide atom indices in visualizations
+    atom_idx_fontsize = 8   # Font size for atom index labels (increase for larger text)
     # Element-specific distances
+
 
     DEBUG_MODE = False    # Set to True to enable debug mode (no calculations)
     excluded_atoms = [] # List of atom indices to exclude from analysis
@@ -824,28 +943,41 @@ if __name__ == "__main__":
         div_dist = max_distances[target_element]['div']
         stw_dist = max_distances[target_element]['stw']
 
-        # from sevenn.calculator import SevenNetCalculator
+        # Setup calculator based on operating system
+        system_platform = platform.system()
 
-        # "mpa" refers to the MPtrj + sAlex modal, used for evaluating Matbench Discovery.
-        # calc = SevenNetCalculator('7net-l3i5', modal='mpa')
-        from gpaw import GPAW, PW, FermiDirac
+        if system_platform == 'Linux':
+            # Use GPAW on Linux
+            from gpaw import GPAW, PW, FermiDirac
 
-        calc = GPAW(
-            xc='PBE',
-            mode=PW(300),  # Reduced from 400 - still reasonable for C-C bond breaking
-            kpts=(1, 1, 1),
-            symmetry='off',
-            spinpol=True,  # Keep this - essential for radicals
-            occupations=FermiDirac(0.05),  # Increased smearing - faster SCF convergence
-            convergence={
-                'energy': 0.001,  # Relaxed from 0.0005 (1 meV is fine for formation energies)
-                'density': 1e-4,  # Much looser - 1e-6 is overkill
-                'eigenstates': 1e-6,  # Looser from 1e-8
-            },
-            mixer={'backend': 'pulay', 'beta': 0.1, 'nmaxold': 5, 'weight': 50},  # Faster mixing
-            maxiter=300,  # Explicit limit to catch non-convergence earlier
-            txt='calculation.txt',
-        )
+            calc = GPAW(
+                xc='PBE',
+                mode=PW(300),  # Reduced from 400 - still reasonable for C-C bond breaking
+                kpts=(1, 1, 1),
+                symmetry='off',
+                spinpol=True,  # Keep this - essential for radicals
+                occupations=FermiDirac(0.05),  # Increased smearing - faster SCF convergence
+                convergence={
+                    'energy': 0.001,  # Relaxed from 0.0005 (1 meV is fine for formation energies)
+                    'density': 1e-4,  # Much looser - 1e-6 is overkill
+                    'eigenstates': 1e-6,  # Looser from 1e-8
+                },
+                mixer={'backend': 'pulay', 'beta': 0.1, 'nmaxold': 5, 'weight': 50},  # Faster mixing
+                maxiter=300,  # Explicit limit to catch non-convergence earlier
+                txt='calculation.txt',
+            )
+            print("Using GPAW calculator on Linux")
+
+        elif system_platform == 'Windows':
+            # Use SevenNet on Windows
+            from sevenn.calculator import SevenNetCalculator
+
+            # "mpa" refers to the MPtrj + sAlex modal, used for evaluating Matbench Discovery.
+            calc = SevenNetCalculator('7net-l3i5', modal='mpa')
+            print("Using SevenNet calculator on Windows")
+
+        else:
+            raise RuntimeError(f"Unsupported platform: {system_platform}. Only Linux (GPAW) and Windows (SevenNet) are supported.")
 
         element_mu = calculate_element_mu(calc, target_element)
         print(f"Chemical potential for {target_element}: {element_mu:.3f} eV")

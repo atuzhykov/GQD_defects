@@ -1,10 +1,12 @@
 import os
+import shutil
 import logging
 from dataclasses import dataclass
 from typing import Dict, Tuple, List
 import numpy as np
-from ase.io import read
+from ase.io import read, write
 from ase.optimize import BFGS
+from ase.visualize.plot import plot_atoms
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -25,6 +27,24 @@ mpl.rcParams['figure.titlesize'] = 18
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def save_structure_image(atoms, filepath, title="Structure"):
+    """Save an image of the atomic structure using ASE's plot_atoms"""
+    try:
+        fig, ax = plt.subplots(figsize=(8, 8))
+        plot_atoms(atoms, ax, rotation=('0x,0y,0z'))
+        ax.set_title(title)
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+    except Exception as e:
+        logger.warning(f"Could not generate image: {e}")
+        plt.close('all')
+
+
+def save_structure_file(atoms, filepath):
+    """Save atomic structure to file (mol, xyz, or other formats based on extension)"""
+    write(filepath, atoms)
 
 
 @dataclass
@@ -423,6 +443,15 @@ class DopingFormationCalculator:
         results_dir = f"doping_map_{molecule_name}_{dopant_element}{suffix}"
         os.makedirs(results_dir, exist_ok=True)
 
+        # Create subdirectories for structures and images
+        structures_dir = os.path.join(results_dir, "relaxed_structures")
+        images_dir = os.path.join(results_dir, "structure_images")
+        os.makedirs(structures_dir, exist_ok=True)
+        os.makedirs(images_dir, exist_ok=True)
+
+        # Copy input file to results directory
+        shutil.copy(mol_path, os.path.join(results_dir, f"input_{os.path.basename(mol_path)}"))
+
         # Load base structure
         base_atoms = read(mol_path)
 
@@ -490,6 +519,16 @@ class DopingFormationCalculator:
                 formation_energies.append(formation_energy)
                 print(f"  Atom {atom_idx} ({host_element}) formation energy: {formation_energy:.3f} eV")
 
+                # Save relaxed structure and image
+                structure_file = os.path.join(structures_dir, f"doped_atom_{atom_idx}_{dopant_element}.xyz")
+                image_file = os.path.join(images_dir, f"doped_atom_{atom_idx}_{dopant_element}.png")
+
+                save_structure_file(doped_atoms, structure_file)
+                save_structure_image(doped_atoms, image_file,
+                                   title=f"{dopant_element} doping at atom {atom_idx} ({host_element})\nE_form = {formation_energy:.3f} eV")
+                print(f"  Saved structure to {structure_file}")
+                print(f"  Saved image to {image_file}")
+
             except Exception as e:
                 print(f"  Error processing atom {atom_idx}: {e}")
                 formation_energies.append(None)
@@ -546,6 +585,29 @@ class DopingFormationCalculator:
         # Plot structure with atoms colored by formation energy
         fig, ax = plt.subplots(figsize=(12, 10))
 
+        # First, draw connections from doping sites to their neighbors
+        max_bond_distance = 1.8  # Standard C-C bond distance threshold
+        for idx in atom_indices:
+            if idx in energy_map and energy_map[idx] is not None:
+                # Find neighboring atoms within bonding distance
+                pos_doping = base_atoms.positions[idx]
+
+                # Normalize energy for coloring
+                norm_energy = (energy_map[idx] - min_energy) / (
+                            max_energy - min_energy) if max_energy > min_energy else 0.5
+                color = cmap(norm_energy)
+
+                # Draw lines to all neighboring atoms
+                for neighbor_idx, neighbor_atom in enumerate(base_atoms):
+                    if neighbor_idx != idx:
+                        distance = base_atoms.get_distance(idx, neighbor_idx)
+                        if distance <= max_bond_distance:
+                            pos_neighbor = base_atoms.positions[neighbor_idx]
+                            ax.plot([pos_doping[0], pos_neighbor[0]],
+                                   [pos_doping[1], pos_neighbor[1]],
+                                   color=color, linewidth=2.5, alpha=0.7, zorder=5)
+
+        # Now plot atoms colored by formation energy
         for i, atom in enumerate(base_atoms):
             if i in energy_map and energy_map[i] is not None:
                 norm_energy = (energy_map[i] - min_energy) / (max_energy - min_energy) if max_energy > min_energy else 0.5
@@ -557,10 +619,10 @@ class DopingFormationCalculator:
                 marker_size = 50 if atom.symbol == 'H' else 100
 
             ax.scatter(atom.position[0], atom.position[1], c=[color], s=marker_size,
-                      edgecolors='black', linewidths=1)
+                      edgecolors='black', linewidths=1, zorder=10)
 
             if show_atom_idx:
-                ax.text(atom.position[0], atom.position[1], str(i), fontsize=8)
+                ax.text(atom.position[0], atom.position[1], str(i), fontsize=8, zorder=15)
 
         # Create colorbar
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(min_energy, max_energy))
@@ -724,7 +786,7 @@ def main():
         print("\n2. NEW MODE - Automated Doping Site Analysis:")
 
         # Configuration
-        molecule_name = "GQD_TRIANGLE_3"  # Choose which molecule to analyze
+        molecule_name = "GQD_HEXAGON_3_3"  # Choose which molecule to analyze
         dopant_element = "B"   # Choose dopant: 'Li', 'N', 'B', 'P', 'S', 'O', 'F'
         show_atom_idx = True    # Show atom indices on plots
         excluded_atoms = []     # Optionally exclude specific atoms
