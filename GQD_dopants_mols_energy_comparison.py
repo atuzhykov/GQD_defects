@@ -520,7 +520,7 @@ class DopingFormationCalculator:
                 print(f"  Atom {atom_idx} ({host_element}) formation energy: {formation_energy:.3f} eV")
 
                 # Save relaxed structure and image
-                structure_file = os.path.join(structures_dir, f"doped_atom_{atom_idx}_{dopant_element}.mol")
+                structure_file = os.path.join(structures_dir, f"doped_atom_{atom_idx}_{dopant_element}.xyz")
                 image_file = os.path.join(images_dir, f"doped_atom_{atom_idx}_{dopant_element}.png")
 
                 save_structure_file(doped_atoms, structure_file)

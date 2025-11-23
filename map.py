@@ -133,7 +133,7 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
             print(f"  Atom {atom_idx} formation energy: {formation_energy:.3f} eV")
 
             # Save relaxed structure and image
-            structure_file = os.path.join(structures_dir, f"vacancy_atom_{atom_idx}.mol")
+            structure_file = os.path.join(structures_dir, f"vacancy_atom_{atom_idx}.xyz")
             image_file = os.path.join(images_dir, f"vacancy_atom_{atom_idx}.png")
 
             save_structure_file(vacancy_atoms, structure_file)
@@ -213,7 +213,7 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
             print(f"  Divacancy {atom_idx1}-{atom_idx2} formation energy: {formation_energy:.3f} eV")
 
             # Save relaxed structure and image
-            structure_file = os.path.join(structures_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.mol")
+            structure_file = os.path.join(structures_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.xyz")
             image_file = os.path.join(images_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.png")
 
             save_structure_file(divacancy_atoms, structure_file)
@@ -297,7 +297,7 @@ def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name
             print(f"  Stone-Wales {atom_idx1}-{atom_idx2} formation energy: {formation_energy:.3f} eV")
 
             # Save relaxed structure and image
-            structure_file = os.path.join(structures_dir, f"stw_bond_{atom_idx1}_{atom_idx2}.mol")
+            structure_file = os.path.join(structures_dir, f"stw_bond_{atom_idx1}_{atom_idx2}.xyz")
             image_file = os.path.join(images_dir, f"stw_bond_{atom_idx1}_{atom_idx2}.png")
 
             save_structure_file(stw_atoms, structure_file)
