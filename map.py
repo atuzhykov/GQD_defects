@@ -85,7 +85,7 @@ def setup_structure(molecule_name):
     return base_relaxed, base_energy
 
 
-def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, show_atom_idx=True, excluded_atoms=[]):
+def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8):
     """Analyze single vacancy formation energies"""
     print("\n=== Running Vacancy Analysis ===\n")
     results_dir = f"vacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
@@ -133,7 +133,7 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
             print(f"  Atom {atom_idx} formation energy: {formation_energy:.3f} eV")
 
             # Save relaxed structure and image
-            structure_file = os.path.join(structures_dir, f"vacancy_atom_{atom_idx}.xyz")
+            structure_file = os.path.join(structures_dir, f"vacancy_atom_{atom_idx}.mol")
             image_file = os.path.join(images_dir, f"vacancy_atom_{atom_idx}.png")
 
             save_structure_file(vacancy_atoms, structure_file)
@@ -148,12 +148,12 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
             formation_energies.append(None)
 
     # Create output files and visualizations
-    _process_vacancy_results(results_dir, base_relaxed, atom_indices, formation_energies, molecule_name, show_atom_idx)
+    _process_vacancy_results(results_dir, base_relaxed, atom_indices, formation_energies, molecule_name, show_atom_idx, atom_idx_fontsize)
 
     return atom_indices, formation_energies
 
 
-def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, max_distance=1.5, show_atom_idx=True, excluded_atoms=[]):
+def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, max_distance=1.5, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8):
     """Analyze divacancy formation energies"""
     print("\n=== Running Divacancy Analysis ===\n")
     results_dir = f"divacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
@@ -213,7 +213,7 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
             print(f"  Divacancy {atom_idx1}-{atom_idx2} formation energy: {formation_energy:.3f} eV")
 
             # Save relaxed structure and image
-            structure_file = os.path.join(structures_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.xyz")
+            structure_file = os.path.join(structures_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.mol")
             image_file = os.path.join(images_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.png")
 
             save_structure_file(divacancy_atoms, structure_file)
@@ -229,12 +229,12 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
 
     # Create output files and visualizations
     _process_divacancy_results(results_dir, base_relaxed, divacancy_pairs, formation_energies, molecule_name,
-                               carbon_indices, show_atom_idx)
+                               carbon_indices, show_atom_idx, atom_idx_fontsize)
 
     return divacancy_pairs, formation_energies
 
 
-def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name, max_distance=1.8, show_atom_idx=True, excluded_atoms=[]):
+def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name, max_distance=1.8, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8):
     """Analyze Stone-Wales transformation formation energies"""
     print("\n=== Running Stone-Wales Analysis ===\n")
     results_dir = f"stw_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
@@ -297,7 +297,7 @@ def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name
             print(f"  Stone-Wales {atom_idx1}-{atom_idx2} formation energy: {formation_energy:.3f} eV")
 
             # Save relaxed structure and image
-            structure_file = os.path.join(structures_dir, f"stw_bond_{atom_idx1}_{atom_idx2}.xyz")
+            structure_file = os.path.join(structures_dir, f"stw_bond_{atom_idx1}_{atom_idx2}.mol")
             image_file = os.path.join(images_dir, f"stw_bond_{atom_idx1}_{atom_idx2}.png")
 
             save_structure_file(stw_atoms, structure_file)
@@ -313,13 +313,13 @@ def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name
 
     # Create output files and visualizations
     _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energies, molecule_name, carbon_indices,
-                         show_atom_idx)
+                         show_atom_idx, atom_idx_fontsize)
 
     return bond_pairs, formation_energies
 
 
 def _process_vacancy_results(results_dir, base_relaxed, atom_indices, formation_energies, molecule_name,
-                             show_atom_idx=True):
+                             show_atom_idx=True, atom_idx_fontsize=8):
     """Process and visualize vacancy results"""
     # Create a dictionary mapping atom indices to formation energies
     energy_map = {idx: energy for idx, energy in zip(atom_indices, formation_energies)}
@@ -398,7 +398,7 @@ def _process_vacancy_results(results_dir, base_relaxed, atom_indices, formation_
 
             # Add atom index for reference if enabled
             if show_atom_idx:
-                ax.text(atom.position[0], atom.position[1], str(i), fontsize=8, zorder=15)
+                ax.text(atom.position[0], atom.position[1], str(i), fontsize=atom_idx_fontsize, zorder=15)
 
         # Create colorbar
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(min_energy, max_energy))
@@ -486,7 +486,7 @@ def _process_vacancy_results(results_dir, base_relaxed, atom_indices, formation_
 
 
 def _process_divacancy_results(results_dir, base_relaxed, divacancy_pairs, formation_energies, molecule_name,
-                               carbon_indices, show_atom_idx=True):
+                               carbon_indices, show_atom_idx=True, atom_idx_fontsize=8):
     """Process and visualize divacancy results"""
     # Create a dictionary mapping divacancy pairs to formation energies
     energy_map = {pair: energy for pair, energy in zip(divacancy_pairs, formation_energies)}
@@ -534,7 +534,7 @@ def _process_divacancy_results(results_dir, base_relaxed, divacancy_pairs, forma
                        edgecolors='black', linewidths=1)
             # Add atom index for reference if enabled
             if show_atom_idx:
-                ax.text(atom.position[0], atom.position[1], str(i), fontsize=8)
+                ax.text(atom.position[0], atom.position[1], str(i), fontsize=atom_idx_fontsize)
 
         # Plot the divacancy pairs as colored lines
         for (idx1, idx2), energy in energy_map.items():
@@ -581,7 +581,7 @@ def _process_divacancy_results(results_dir, base_relaxed, divacancy_pairs, forma
                         edgecolors='black', linewidths=1)
             # Add atom index for reference if enabled
             if show_atom_idx:
-                ax2.text(atom.position[0], atom.position[1], str(i), fontsize=8)
+                ax2.text(atom.position[0], atom.position[1], str(i), fontsize=atom_idx_fontsize)
 
         # Sort divacancies by formation energy
         sorted_data = sorted(valid_data, key=lambda x: x[1])
@@ -691,7 +691,7 @@ def _process_divacancy_results(results_dir, base_relaxed, divacancy_pairs, forma
 
 
 def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energies, molecule_name, carbon_indices,
-                         show_atom_idx=True):
+                         show_atom_idx=True, atom_idx_fontsize=8):
     """Process and visualize Stone-Wales results"""
     # Create a dictionary mapping bond pairs to formation energies
     energy_map = {pair: energy for pair, energy in zip(bond_pairs, formation_energies)}
@@ -739,7 +739,7 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
                        edgecolors='black', linewidths=1)
             # Add atom index for reference if enabled
             if show_atom_idx:
-                ax.text(atom.position[0], atom.position[1], str(i), fontsize=8)
+                ax.text(atom.position[0], atom.position[1], str(i), fontsize=atom_idx_fontsize)
 
         # Plot bonds between all carbon atoms (to show the structure)
         for idx1, idx2 in combinations(carbon_indices, 2):
@@ -795,7 +795,7 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
                         edgecolors='black', linewidths=1)
             # Add atom index for reference if enabled
             if show_atom_idx:
-                ax2.text(atom.position[0], atom.position[1], str(i), fontsize=8)
+                ax2.text(atom.position[0], atom.position[1], str(i), fontsize=atom_idx_fontsize)
 
         # Plot all bonds lightly
         for idx1, idx2 in combinations(carbon_indices, 2):
@@ -986,15 +986,15 @@ if __name__ == "__main__":
 
         # Run selected analysis
         if defect_type == 'vacancy' or defect_type == 'all':
-            analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, show_atom_idx, excluded_atoms=excluded_atoms)
+            analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize)
 
         if defect_type == 'divacancy' or defect_type == 'all':
             analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name,
-                               max_distance=div_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms)
+                               max_distance=div_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize)
 
         if defect_type == 'stw' or defect_type == 'all':
             analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name,
-                               max_distance=stw_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms)
+                               max_distance=stw_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize)
 
         print("\nAnalysis complete!")
 
