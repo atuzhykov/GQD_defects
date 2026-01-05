@@ -422,7 +422,7 @@ def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, ra
     write_traj_xyz(os.path.join(experiment_dir, 'core_trajectory.traj'),
                    os.path.join(experiment_dir, 'core_trajectory.xyz'))
 
-    formation_energy = calculate_formation_energy(atoms, modified_atoms, calc, MU_C)
+    formation_energy = calculate_formation_energy(atoms, modified_atoms, calc, -9.214)
     with open(os.path.join(experiment_dir, "analysis_output.txt"), "w", encoding="utf-8") as file:
         file.write("Calculation Setup Analysis:\n")
         file.write(f"Formation Energy: {formation_energy:.3f} eV")

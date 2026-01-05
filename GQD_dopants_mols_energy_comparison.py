@@ -201,7 +201,8 @@ class DopingFormationCalculator:
             'Li': (-1.82, 0.05),
         }
 
-    def calculate_doping_energy(self, pristine_key: str, doped_key: str) -> DopingResult:
+    def calculate_doping_energy(self, pristine_key: str, doped_key: str,
+                               save_structures: bool = False, results_dir: str = None) -> DopingResult:
         """
         Calculate doping formation energy with cell size normalization.
 
@@ -222,8 +223,12 @@ class DopingFormationCalculator:
         """
 
         # Step 1: Calculate energies
-        E_pristine, forces_pristine = self._get_energy(pristine_key)
-        E_doped, forces_doped = self._get_energy(doped_key)
+        if save_structures:
+            E_pristine, forces_pristine, atoms_pristine = self._get_energy(pristine_key, return_atoms=True)
+            E_doped, forces_doped, atoms_doped = self._get_energy(doped_key, return_atoms=True)
+        else:
+            E_pristine, forces_pristine = self._get_energy(pristine_key)
+            E_doped, forces_doped = self._get_energy(doped_key)
 
         # Step 2: Analyze doping configuration
         dopant_info = self._analyze_doping(pristine_key, doped_key)
@@ -269,6 +274,88 @@ class DopingFormationCalculator:
             formation_energy_per_dopant, uncertainty_per_dopant
         )
 
+        # Save relaxed structures if requested
+        if save_structures and results_dir is not None:
+            import os
+            import shutil
+
+            os.makedirs(results_dir, exist_ok=True)
+
+            # Create subdirectories for XYZ and MOL formats
+            structures_xyz_dir = os.path.join(results_dir, "relaxed_structures_xyz")
+            structures_mol_dir = os.path.join(results_dir, "relaxed_structures_mol")
+            os.makedirs(structures_xyz_dir, exist_ok=True)
+            os.makedirs(structures_mol_dir, exist_ok=True)
+
+            # Import save functions from map.py or this file
+            from map import save_structure_file
+
+            # Save pristine structure
+            pristine_xyz = os.path.join(structures_xyz_dir, f"{pristine_key}_relaxed.xyz")
+            pristine_mol = os.path.join(structures_mol_dir, f"{pristine_key}_relaxed.mol")
+            pristine_bonds = atoms_pristine.info.get('original_bonds', None)
+            save_structure_file(atoms_pristine, pristine_xyz, pristine_mol, original_bonds=pristine_bonds)
+            logger.info(f"Saved pristine structure: {pristine_xyz} and {pristine_mol}")
+
+            # Save doped structure
+            doped_xyz = os.path.join(structures_xyz_dir, f"{doped_key}_relaxed.xyz")
+            doped_mol = os.path.join(structures_mol_dir, f"{doped_key}_relaxed.mol")
+            doped_bonds = atoms_doped.info.get('original_bonds', None)
+            save_structure_file(atoms_doped, doped_xyz, doped_mol, original_bonds=doped_bonds)
+            logger.info(f"Saved doped structure: {doped_xyz} and {doped_mol}")
+
+            # Copy input files to results directory for reference
+            for key in [pristine_key, doped_key]:
+                input_path = molecules_data[key]["path"]
+                if os.path.exists(input_path):
+                    shutil.copy(input_path, os.path.join(results_dir, f"input_{os.path.basename(input_path)}"))
+
+            # Save doping energy analysis to text file
+            summary_file = os.path.join(results_dir, "doping_energy_analysis.txt")
+            with open(summary_file, 'w') as f:
+                f.write("=" * 70 + "\n")
+                f.write("DOPING FORMATION ENERGY ANALYSIS\n")
+                f.write("=" * 70 + "\n\n")
+
+                f.write(f"Pristine system: {pristine_key}\n")
+                f.write(f"Doped system: {doped_key}\n\n")
+
+                f.write("System Information:\n")
+                f.write(f"  Cell size: {dopant_info['cell_size']} atoms\n")
+                f.write(f"  Doping type: {dopant_info['type']}\n")
+                f.write(f"  Dopant: {dopant_info['dopant_element']} ({dopant_info['n_dopants']} atoms)\n")
+                f.write(f"  Host removed: {dopant_info['host_removed']} ({dopant_info['n_host_removed']} atoms)\n")
+                f.write(f"  Concentration: {dopant_info['concentration']:.2f}%\n\n")
+
+                f.write("Energy Components:\n")
+                f.write(f"  E(pristine): {components['E_pristine']:.6f} eV\n")
+                f.write(f"  E(doped):    {components['E_doped']:.6f} eV\n")
+                f.write(f"  ΔE:          {components['delta_E']:.6f} eV\n\n")
+
+                f.write("Chemical Potentials:\n")
+                if 'mu_host' in components:
+                    f.write(f"  μ(host) × n:   +{components['mu_host']:.6f} eV\n")
+                if 'mu_dopant' in components:
+                    f.write(f"  μ(dopant) × n: -{components['mu_dopant']:.6f} eV\n")
+                f.write(f"  Total correction: {components['mu_correction']:.6f} eV\n\n")
+
+                f.write("=" * 70 + "\n")
+                f.write("RESULTS:\n")
+                f.write(f"  ΔE_f (total cell):     {formation_energy_total:.6f} eV\n")
+                f.write(f"  ΔE_f (per dopant):     {formation_energy_per_dopant:.6f} ± {uncertainty_per_dopant:.6f} eV\n")
+                f.write("=" * 70 + "\n\n")
+
+                if validation_flags:
+                    f.write("VALIDATION FLAGS:\n")
+                    for flag in validation_flags:
+                        f.write(f"  - {flag}\n")
+                else:
+                    f.write("VALIDATION: ✓ All physical checks passed\n")
+
+                f.write("\n" + "=" * 70 + "\n")
+
+            logger.info(f"Saved doping energy analysis to: {summary_file}")
+
         return DopingResult(
             formation_energy=formation_energy_total,
             formation_energy_per_dopant=formation_energy_per_dopant,
@@ -278,23 +365,34 @@ class DopingFormationCalculator:
             validation_flags=validation_flags
         )
 
-    def _get_energy(self, mol_key: str) -> Tuple[float, np.ndarray]:
+    def _get_energy(self, mol_key: str, return_atoms: bool = False) -> Tuple:
         """
         Calculate optimized energy for a structure.
 
         Args:
             mol_key: Key in molecules_data
+            return_atoms: If True, also return relaxed atoms object
 
         Returns:
             energy: Total energy [eV]
             forces: Atomic forces [eV/Å]
+            atoms: Relaxed atoms object (only if return_atoms=True)
         """
-        # Use cache if available
-        if mol_key in self.energy_cache:
+        # Use cache if available (but only for energy/forces, not atoms)
+        if mol_key in self.energy_cache and not return_atoms:
             return self.energy_cache[mol_key]
 
         # Load structure
-        atoms = read(molecules_data[mol_key]["path"])
+        mol_path = molecules_data[mol_key]["path"]
+        atoms = read(mol_path)
+
+        # Read and store original bonds if MOL file
+        if mol_path.endswith('.mol'):
+            from map import read_bonds_from_mol  # Import from map.py
+            original_bonds = read_bonds_from_mol(mol_path)
+            if original_bonds:
+                atoms.info['original_bonds'] = original_bonds
+
         atoms.calc = self.calc
 
         # Geometry optimization
@@ -312,9 +410,11 @@ class DopingFormationCalculator:
 
         logger.info(f"Energy for {mol_key}: {energy:.4f} eV (max_force: {max_force:.4f})")
 
-        # Cache result
+        # Cache result (only energy and forces, not atoms)
         self.energy_cache[mol_key] = (energy, forces)
 
+        if return_atoms:
+            return energy, forces, atoms
         return energy, forces
 
     def _analyze_doping(self, pristine_key: str, doped_key: str) -> Dict:
@@ -872,9 +972,14 @@ def main():
         pristine_key = "GQD_TRIANGLE_3"
         doped_key = "GQD_TRIANGLE_3_min_C_added_N"
 
+        # Create results directory for legacy mode
+        results_dir = f"legacy_doping_{pristine_key}_vs_{doped_key}"
+
         result = calculator.calculate_doping_energy(
             pristine_key=pristine_key,
-            doped_key=doped_key
+            doped_key=doped_key,
+            save_structures=True,  # Enable structure saving
+            results_dir=results_dir  # Save to this directory
         )
 
         # Comparison
@@ -882,6 +987,14 @@ def main():
         print("COMPARISON (per-dopant energies):")
         print(f"  N-doping: {result.formation_energy_per_dopant:.3f} ± {result.uncertainty:.3f} eV")
         print(f"\n⚠️ Note: concentration is {result.dopant_info['concentration']:.1f}%")
+        print(f"{'=' * 60}")
+
+        print(f"\n{'=' * 60}")
+        print(f"Results saved to: {results_dir}/")
+        print(f"  - doping_energy_analysis.txt: Complete thermodynamic analysis")
+        print(f"  - relaxed_structures_xyz/: XYZ format files")
+        print(f"  - relaxed_structures_mol/: MOL format files with bonds")
+        print(f"  - input_*.mol: Original input files")
         print(f"{'=' * 60}")
 
     # ============================================================
