@@ -1,7 +1,9 @@
+import datetime
 import os
 import platform
 import numpy as np
-from ase.io import read
+from ase.constraints import FixAtoms
+from ase.io import read, Trajectory
 from ase.optimize import BFGS
 from ase.visualize import view
 
@@ -10,13 +12,12 @@ from utils import (
     rotate_bond_transform,
     delete_atoms_transform,
     move_atom_transform,
-    get_distance,
-    track_core_structure,
+    get_distance, calculate_formation_energy, write_traj_xyz, save_structure
 )
 
 # ============= DEBUG MODE =============
 # Set True to visualize atom indices, False to run calculations
-DEBUG_MODE = True
+DEBUG_MODE = False
 
 # ============= RELAXATION SETTINGS =============
 # Set True to use previously saved relaxed structure (skip relaxation)
@@ -70,7 +71,7 @@ calc = setup_calculator()
 
 # ============= MOLECULE SETUP =============
 # Choose which molecule to work with from config.py
-molecule_name = "Coronene"
+molecule_name = "GQD_HEXAGON_3_3"
 mol_filename = molecules_data[molecule_name]["path"]
 cell = molecules_data[molecule_name]["cell"]
 
@@ -91,7 +92,7 @@ if DEBUG_MODE:
 # ============= DEFECT CONFIGURATION =============
 # Choose which atoms define the defect axis
 # Use DEBUG_MODE to visualize atom indices
-axis_atoms = (21, 16)  # Change these based on your molecule
+axis_atoms = (32, 16)  # Change these based on your molecule
 
 # ============= TRANSFORM SELECTION =============
 # Enable/disable specific defect types by setting to True/False
@@ -148,6 +149,86 @@ if ENABLE_STONE_WALES:
 
 
 # ============= EXECUTION =============
+def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, radius=8,
+                         task_name="core_tracking", fix_ends=False, fixed_atoms=[]):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    experiment_dir = os.path.join(f"experiments", f"{task_name}_{timestamp}")
+    os.makedirs(experiment_dir, exist_ok=True)
+
+
+    fixed_indices = []
+    if fix_ends:
+        current_atoms = atoms.copy()
+        central_pos = current_atoms.positions[central_atom_index]
+        all_distances = np.linalg.norm(current_atoms.positions - central_pos, axis=1)
+        fixed_indices = [i for i in range(len(atoms))
+                         if all_distances[i] > radius and i != central_atom_index]
+
+    c = FixAtoms(indices=fixed_indices+fixed_atoms)
+    atoms.set_constraint(c)
+
+    initial_distances = atoms.get_distances(central_atom_index, range(len(atoms)))
+    initial_core_mask = initial_distances <= radius
+
+    # Create trajectory files
+    full_traj = Trajectory(os.path.join(experiment_dir, 'full_trajectory.traj'), 'w')
+    core_traj = Trajectory(os.path.join(experiment_dir, 'core_trajectory.traj'), 'w')
+    initial_core_traj = Trajectory(os.path.join(experiment_dir, 'initial_core.traj'), 'w')
+
+    # Write the initial state to the trajectory files
+    full_traj.write(atoms)
+    core_traj.write(atoms[initial_core_mask])
+
+    initial_core_atoms = atoms[initial_core_mask]
+    initial_core_traj.write(initial_core_atoms)
+
+    # Apply transformations
+    modified_atoms = atoms.copy()
+    for transform in transforms:
+        modified_atoms = transform(modified_atoms)
+
+    # Create a mask for the core atoms after transformations
+    distances = modified_atoms.get_distances(central_atom_index, range(len(modified_atoms)))
+    core_mask = distances <= radius
+
+    modified_atoms.set_calculator(calc)
+
+    # Define the save_core_state function
+    def save_core_state(atoms=modified_atoms):
+        # Use the mask to get the core atoms
+        core_atoms = atoms[core_mask]
+
+        # Save structures
+        full_traj.write(atoms)
+        core_traj.write(core_atoms)
+
+
+    dyn = BFGS(modified_atoms)
+    dyn.attach(save_core_state, interval=1)
+
+    dyn.run(fmax=fmax)
+
+
+    save_core_state(modified_atoms)
+
+    # Close trajectories
+    full_traj.close()
+    core_traj.close()
+
+    # Convert to xyz
+    write_traj_xyz(os.path.join(experiment_dir, 'full_trajectory.traj'),
+                   os.path.join(experiment_dir, 'full_trajectory.xyz'))
+    write_traj_xyz(os.path.join(experiment_dir, 'core_trajectory.traj'),
+                   os.path.join(experiment_dir, 'core_trajectory.xyz'))
+
+    formation_energy = calculate_formation_energy(atoms, modified_atoms, calc, -9.214)
+    with open(os.path.join(experiment_dir, "analysis_output.txt"), "w", encoding="utf-8") as file:
+        file.write("Calculation Setup Analysis:\n")
+        file.write(f"Formation Energy: {formation_energy:.3f} eV")
+    save_structure(modified_atoms, os.path.join(experiment_dir, f"{task_name}"))
+    return modified_atoms
+
+
 if not DEBUG_MODE:
     # Set up calculator and optimization parameters
     fmax = 0.5  # Maximum force criterion for optimization
