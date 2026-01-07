@@ -412,152 +412,6 @@ class GPAWAnalyzer:
 
         return energies, spectrum
 
-    def calculate_optical_properties(self, energy_range=(0, 10), energy_step=0.01,
-                                    width=0.1, method='lr-tddft'):
-        """
-        Calculate optical absorption spectrum using TDDFT.
-
-        Parameters:
-            energy_range (tuple): Energy range for spectrum in eV (default: 0-10 eV)
-            energy_step (float): Energy step in eV (default: 0.01 eV)
-            width (float): Gaussian broadening width in eV (default: 0.1 eV)
-            method (str): 'lr-tddft' (linear response) or 'rt-tddft' (real-time)
-
-        Returns:
-            tuple: (energies, absorption_spectrum)
-        """
-        if not self.is_converged:
-            raise RuntimeError("Calculator not set up. Run setup_calculator() first.")
-
-        print("\nCalculating optical properties using TDDFT...")
-        print(f"  Method: {method}")
-        print("  This may take a while...")
-
-        # Save ground state for TDDFT
-        gs_file = os.path.join(self.output_dir, 'gs.gpw')
-        self.calc.write(gs_file)
-
-        if method == 'lr-tddft':
-            # Linear Response TDDFT - more stable for molecules
-            from gpaw.lrtddft import LrTDDFT
-
-            print(f"  Calculating excited states with LrTDDFT...")
-
-            # Create LrTDDFT object - parameters depend on GPAW version
-            try:
-                # Try newer API (GPAW >= 20.x)
-                lr = LrTDDFT(gs_file, txt=os.path.join(self.output_dir, 'lrtddft.txt'))
-            except Exception as e:
-                print(f"  Note: Using fallback LrTDDFT initialization")
-                lr = LrTDDFT(gs_file)
-
-            # Calculate excitation energies and oscillator strengths
-            lr.write(os.path.join(self.output_dir, 'excitations.dat'))
-
-            # Get excitation data (transitions)
-            exlist = []
-            try:
-                # Method 1: Direct iteration
-                for ex in lr:
-                    exlist.append({
-                        'energy': ex.get_energy(),
-                        'weight': ex.get_oscillator_strength()[0]  # Sum of x,y,z
-                    })
-            except:
-                # Method 2: Manual reading from file
-                print("  Reading transitions from file...")
-                with open(os.path.join(self.output_dir, 'excitations.dat'), 'r') as f:
-                    for line in f:
-                        if line.startswith('#') or not line.strip():
-                            continue
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            try:
-                                exlist.append({
-                                    'energy': float(parts[1]),
-                                    'weight': float(parts[2]) if len(parts) > 2 else 0.1
-                                })
-                            except:
-                                continue
-
-            # Create absorption spectrum from discrete transitions
-            energies = np.arange(energy_range[0], energy_range[1], energy_step)
-            spectrum = np.zeros_like(energies)
-
-            if len(exlist) == 0:
-                print("  Warning: No transitions found. Check excitations.dat file")
-                print("  Creating empty spectrum...")
-            else:
-                # Broaden each transition with a Gaussian
-                for ex in exlist:
-                    energy = ex['energy']  # eV
-                    osc_str = ex['weight']  # oscillator strength
-
-                    # Gaussian broadening
-                    gaussian = osc_str * np.exp(-((energies - energy) / width) ** 2)
-                    spectrum += gaussian
-
-                print(f"  Calculated {len(exlist)} transitions")
-                if len(exlist) > 0:
-                    print(f"  First excitation at {exlist[0]['energy']:.3f} eV")
-
-        else:
-            # Real-time TDDFT (original implementation)
-            print("  Using real-time propagation TDDFT...")
-            from gpaw.tddft import TDDFT
-            from gpaw.tddft.spectrum import photoabsorption_spectrum
-
-            td_calc = TDDFT(gs_file, txt=os.path.join(self.output_dir, 'tddft.txt'))
-
-            # Apply kick in x, y, z directions
-            kicks = [0, 1, 2]  # x, y, z
-
-            print("  Performing time propagation...")
-            # Time propagation parameters
-            time_step = 10  # attoseconds
-            iterations = 1000  # Total time = 10 fs
-
-            spectrum_total = None
-
-            for kick_direction in kicks:
-                td_calc.absorption_kick(kick_strength=[1e-3 if i == kick_direction else 0
-                                                       for i in range(3)])
-                td_calc.propagate(time_step, iterations,
-                                f'{self.output_dir}/dm_{kick_direction}.dat')
-
-                # Calculate spectrum for this direction
-                e, spec = photoabsorption_spectrum(
-                    f'{self.output_dir}/dm_{kick_direction}.dat',
-                    f'{self.output_dir}/spec_{kick_direction}.dat',
-                    width=width
-                )
-
-                if spectrum_total is None:
-                    energies = e
-                    spectrum_total = spec
-                else:
-                    spectrum_total += spec
-
-            spectrum = spectrum_total / 3.0  # Average over x, y, z
-
-        self.results['optical'] = {
-            'energies': energies,
-            'absorption': spectrum
-        }
-
-        # Save spectrum data
-        with open(os.path.join(self.output_dir, 'absorption_spectrum.txt'), 'w') as f:
-            f.write("# Optical Absorption Spectrum\n")
-            f.write("# Energy(eV)  Absorption(arb. units)\n")
-            for e, a in zip(energies, spectrum):
-                f.write(f"{e:.6f}  {a:.6e}\n")
-
-        # Plot spectrum
-        self._plot_optical_spectrum(energies, spectrum)
-
-        print(f"  Optical spectrum calculated")
-
-        return energies, spectrum
 
     def _plot_optical_spectrum(self, energies, absorption):
         """Plot optical absorption spectrum."""
@@ -614,85 +468,7 @@ class GPAWAnalyzer:
 
         return dipole_debye
 
-    def calculate_mulliken_charges(self):
-        """
-        Calculate atomic charges using Bader or Hirshfeld analysis.
-        Note: GPAW doesn't have built-in Mulliken charges.
 
-        Returns:
-            numpy.ndarray: Atomic charges
-        """
-        if not self.is_converged:
-            raise RuntimeError("Calculator not set up. Run setup_calculator() first.")
-
-        print("\nCalculating atomic charges...")
-
-        try:
-            # GPAW supports Hirshfeld charges (better than Mulliken for DFT)
-            from gpaw.analyse.hirshfeld import HirshfeldPartitioning
-
-            # Perform Hirshfeld partitioning
-            hp = HirshfeldPartitioning(self.calc)
-            charges = hp.get_charges()
-
-            self.results['hirshfeld_charges'] = charges
-
-            print(f"  Hirshfeld charges calculated for {len(charges)} atoms")
-
-            # Save to file
-            with open(os.path.join(self.output_dir, 'hirshfeld_charges.txt'), 'w') as f:
-                f.write(f"Hirshfeld Atomic Charges for {self.molecule_name}\n")
-                f.write(f"{'='*60}\n")
-                f.write(f"Note: Hirshfeld analysis is more reliable than Mulliken for DFT\n")
-                f.write(f"{'='*60}\n")
-                f.write(f"{'Atom':<6} {'Element':<8} {'Charge (e)':<15}\n")
-                f.write(f"{'-'*60}\n")
-                for i, (atom, charge) in enumerate(zip(self.atoms, charges)):
-                    f.write(f"{i:<6} {atom.symbol:<8} {charge:>12.6f}\n")
-
-                f.write(f"\nTotal charge: {np.sum(charges):.6f} e\n")
-
-            print(f"  Total charge: {np.sum(charges):.6f} e")
-            return charges
-
-        except ImportError:
-            print(f"  Warning: Hirshfeld analysis not available in this GPAW version")
-            print(f"  Calculating simple Bader-like charges from density...")
-
-            try:
-                # Fallback: Use density-based charges
-                # Get all-electron density
-                density = self.calc.get_all_electron_density()
-
-                # Simple charge estimate: integrate density around each atom
-                charges = np.zeros(len(self.atoms))
-
-                # This is a very rough estimate
-                print(f"  Using approximate density-based charges")
-                print(f"  Note: These are less accurate than Hirshfeld or Bader analysis")
-
-                # For now, just return zeros with a warning
-                self.results['approximate_charges'] = charges
-
-                with open(os.path.join(self.output_dir, 'charges_note.txt'), 'w') as f:
-                    f.write(f"Charge Analysis for {self.molecule_name}\n")
-                    f.write(f"{'='*60}\n")
-                    f.write(f"Note: Accurate charge analysis requires:\n")
-                    f.write(f"  - Hirshfeld partitioning (install GPAW with full features)\n")
-                    f.write(f"  - Or external Bader analysis tool\n")
-                    f.write(f"\nFor GPAW Hirshfeld analysis:\n")
-                    f.write(f"  from gpaw.analyse.hirshfeld import HirshfeldPartitioning\n")
-
-                print(f"  See charges_note.txt for more information")
-                return charges
-
-            except Exception as e:
-                print(f"  Warning: Could not calculate charges: {e}")
-                return None
-
-        except Exception as e:
-            print(f"  Warning: Could not calculate Hirshfeld charges: {e}")
-            return None
 
     def calculate_phonons(self, delta=0.01, nfree=2):
         """
@@ -775,7 +551,7 @@ class GPAWAnalyzer:
         print(f"  Vibrational spectrum plot saved")
 
     def run_full_analysis(self, include_optical=True, include_phonons=True,
-                         include_dipole=True, include_charges=True):
+                         include_dipole=True):
         """
         Run complete GPAW analysis including all calculations.
 
@@ -783,7 +559,6 @@ class GPAWAnalyzer:
             include_optical (bool): Calculate optical properties (time-consuming)
             include_phonons (bool): Calculate phonons (time-consuming)
             include_dipole (bool): Calculate dipole moment
-            include_charges (bool): Calculate Mulliken charges
 
         Returns:
             dict: Complete results dictionary
@@ -808,25 +583,12 @@ class GPAWAnalyzer:
             except Exception as e:
                 print(f"\nWarning: Dipole calculation failed: {e}")
 
-        # 5. Mulliken charges (fast)
-        if include_charges:
-            try:
-                self.calculate_mulliken_charges()
-            except Exception as e:
-                print(f"\nWarning: Charge calculation failed: {e}")
 
         # 6. Optical properties (optional - can be slow)
         if include_optical:
-            try:
-                self.calculate_optical_properties(method='lr-tddft')
-            except Exception as e:
-                print(f"\nWarning: TDDFT optical calculation failed: {e}")
-                print("Trying simple spectrum instead...")
-                try:
-                    self.calculate_simple_spectrum()
-                except Exception as e2:
-                    print(f"Warning: Simple spectrum also failed: {e2}")
-                    print("Continuing with other calculations...")
+
+            self.calculate_simple_spectrum()
+
 
         # 7. Phonons (optional - can be slow)
         if include_phonons:
@@ -902,7 +664,7 @@ class GPAWAnalyzer:
 
 if __name__ == "__main__":
     # Example usage
-    molecule_name = "QD_1"  # Change this to analyze different molecules
+    molecule_name = "Coronene"  # Change this to analyze different molecules
 
     # Create analyzer
     analyzer = GPAWAnalyzer(
@@ -917,7 +679,7 @@ if __name__ == "__main__":
     # Note: Set include_optical=False and include_phonons=False for faster testing
     results = analyzer.run_full_analysis(
         include_optical=True,   # Set to False to skip optical calculations
-        include_phonons=True    # Set to False to skip phonon calculations
+        include_phonons=False    # Set to False to skip phonon calculations
     )
 
     # Access individual results
