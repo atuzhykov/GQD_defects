@@ -103,7 +103,7 @@ class GPAWAnalyzer:
         positions = positions + translation
         self.atoms.set_positions(positions)
         self.atoms.set_cell([cell_size] * 3)
-        self.atoms.set_pbc(True)
+        self.atoms.set_pbc(False)
 
         print(f"Loaded {self.molecule_name}: {len(self.atoms)} atoms")
         print(f"Chemical formula: {self.atoms.get_chemical_formula()}")
@@ -305,8 +305,13 @@ class GPAWAnalyzer:
         if save_cube:
             from ase.io.cube import write_cube
 
+            # Get density without grid refinement for correct cube file
+            # (gridrefinement=2 creates 2x finer grid that write_cube doesn't handle)
+            # density_for_cube = self.calc.get_all_electron_density(gridrefinement=1)
+            density_for_cube = self.calc.get_pseudo_density()
+
             with open(os.path.join(self.output_dir, 'density.cube'), 'w') as f:
-                write_cube(f, self.atoms, all_electron_density)
+                write_cube(f, self.atoms, density_for_cube)
             print(f"  Density saved in cube format for visualization")
 
         # Create 2D slice visualization
@@ -344,16 +349,106 @@ class GPAWAnalyzer:
 
     def calculate_simple_spectrum(self, energy_range=(0, 10), energy_step=0.01, width=0.3):
         """
-        Calculate simple absorption spectrum from single-particle transitions.
-        This is a fast approximation - does not include electron-hole interactions.
+        Розрахунок оптичного спектру поглинання на основі одночастинкових
+        енергій Кона-Шема (Kohn-Sham) з DFT.
 
-        Parameters:
-            energy_range (tuple): Energy range in eV
-            energy_step (float): Energy step in eV
-            width (float): Gaussian broadening in eV
+            ═══════════════════════════════════════════════════════════════════
+            ТЕОРЕТИЧНЕ ПІДҐРУНТЯ
+            ═══════════════════════════════════════════════════════════════════
 
-        Returns:
-            tuple: (energies, spectrum)
+            Це наближення "нульового порядку" — швидка оцінка оптичних властивостей
+            без урахування ексцитонних ефектів (взаємодії електрон-дірка).
+
+            У повному TDDFT враховується, що при збудженні електрон залишає
+            "дірку" на зайнятому рівні, і вони взаємодіють кулонівськи.
+            Тут ми це ігноруємо — просто дивимось на різницю енергій орбіталей.
+
+            Точність: ±0.5-1.0 eV для енергій переходів (занижує gap).
+            Застосування: швидкий скринінг, якісні тренди, початкова оцінка.
+
+            ═══════════════════════════════════════════════════════════════════
+            АЛГОРИТМ РОЗРАХУНКУ
+            ═══════════════════════════════════════════════════════════════════
+
+            Крок 1: Отримання енергій орбіталей
+            ───────────────────────────────────
+                З ground-state DFT витягуємо власні значення (eigenvalues):
+
+                    ε_i — енергії зайнятих орбіталей (i ≤ HOMO)
+                    ε_j — енергії вільних орбіталей (j ≥ LUMO)
+
+                Для спін-поляризованої системи — окремо для α (spin=0) та β (spin=1):
+
+                    eigenvalues_up   = calc.get_eigenvalues(kpt=0, spin=0)
+                    eigenvalues_down = calc.get_eigenvalues(kpt=0, spin=1)
+
+                Індекс HOMO визначається з кількості електронів:
+
+                    n_electrons = calc.get_number_of_electrons()
+                    homo_idx = n_electrons // 2  (для закритої оболонки)
+
+            Крок 2: Генерація переходів
+            ───────────────────────────
+                Для кожної пари зайнятий→вільний обчислюємо енергію переходу:
+
+                    ΔE_ij = ε_j - ε_i  [eV]
+
+                Обмежуємо кількість орбіталей для ефективності:
+                - Зайняті:  від (homo_idx - n_occ_extra) до homo_idx
+                - Вільні:   від (homo_idx + 1) до (homo_idx + 1 + n_unocc_extra)
+
+                Це дає ~n_occ_extra × n_unocc_extra переходів замість N²/4.
+
+            Крок 3: Інтенсивності (сила осцилятора)
+            ───────────────────────────────────────
+                Проста версія (використовується тут):
+
+                    weight_ij = ΔE_ij  (лінійна залежність від енергії)
+
+                Покращена версія (потребує хвильових функцій):
+
+                    weight_ij = |μ_ij|² × ΔE_ij
+
+                де μ_ij = ⟨ψ_i|r̂|ψ_j⟩ — дипольний матричний елемент.
+
+                Правила відбору:
+                - Дозволені переходи: μ_ij ≠ 0 (зміна симетрії)
+                - Заборонені переходи: μ_ij ≈ 0 (однакова симетрія)
+
+                Для бензолу (D₆ₕ симетрія) багато переходів заборонені!
+
+            Крок 4: Побудова спектру
+            ────────────────────────
+                Кожен дискретний перехід "розмазуємо" Гауссіаном:
+
+                    S(E) = Σ_ij  weight_ij × exp[ -((E - ΔE_ij) / width)² ]
+
+                Параметр width (0.1-0.3 eV) імітує:
+                - Теплове розширення (kT ≈ 0.026 eV при 300K)
+                - Коливальну структуру (вібронні переходи)
+                - Експериментальне розширення приладу
+
+                Нормалізація: S(E) /= max(S(E))
+
+            ═══════════════════════════════════════════════════════════════════
+            ОБМЕЖЕННЯ МЕТОДУ
+            ═══════════════════════════════════════════════════════════════════
+
+            1. Занижує оптичний gap (KS gap < справжній gap)
+               - PBE занижує на ~30-50%
+               - Для точності потрібен GW або гібридні функціонали
+
+            2. Ігнорує ексцитонні ефекти
+               - Для органіки: зв'язування ~0.3-1.0 eV
+               - Для квантових точок: може бути значним!
+
+            3. Не враховує правила відбору
+               - Всі переходи вважаються дозволеними
+               - У реальності симетрія забороняє багато переходів
+
+            4. Немає вібронної структури
+               - Справжні спектри мають тонку структуру від коливань
+
         """
         if not self.is_converged:
             raise RuntimeError("Calculator not set up. Run setup_calculator() first.")
