@@ -68,13 +68,14 @@ class FormationEnergyCalculator:
     - n_i: Stoichiometric coefficient (positive for addition, negative for removal)
     """
 
-    def __init__(self, calculator, fmax=0.005):
+    def __init__(self, calculator, fmax=0.005, calc_name="MLIP"):
         """
         Initialize formation energy calculator with quantum mechanical parameters.
 
         Args:
             calculator: DFT calculator (e.g., SevenNet, VASP, Gaussian)
             fmax: Force convergence criterion [eV/Å] - controls geometric accuracy
+            calc_name: Name of the calculator for result folder naming (e.g., "GPAW" or "MLIP")
 
         Physical rationale for fmax=0.005 eV/Å:
         - Ensures forces < kT at 300K (~0.025 eV) per angstrom
@@ -83,6 +84,7 @@ class FormationEnergyCalculator:
         """
         self.calc = calculator
         self.fmax = fmax  # Geometric convergence criterion [eV/Å]
+        self.calc_name = calc_name
         self.ref_cache = {}  # Computational efficiency: cache reference calculations
 
         # Standard chemical potentials with experimental/theoretical uncertainties [eV]
@@ -104,6 +106,20 @@ class FormationEnergyCalculator:
             'OH': (['O', 'H'], [('O', 'H', 0.97)]),  # Hydroxyl group
             'COOH': (['C', 'O', 'O', 'H'], [('C', 'O', 1.21), ('C', 'O', 1.36), ('O', 'H', 0.97)]),  # Carboxyl
             'BH2': (['B', 'H', 'H'], [('B', 'H', 1.19), ('H', 'B', 1.19)]),  # Borane group
+        }
+
+        # Net composition change when functional group replaces one H atom
+        # Used for pattern matching: full_group - 1H = net_change
+        # IMPORTANT: Order matters! Larger/more specific patterns must come first
+        # COOH replaces H: -H +COOH = +C +2O (must match before OH!)
+        # NH2 replaces H: -H +NH2 = +N +1H
+        # BH2 replaces H: -H +BH2 = +B +1H
+        # OH  replaces H: -H +OH  = +O (smallest, must be last)
+        self.fg_substitution_patterns = {
+            'COOH': {'C': 1, 'O': 2},  # Must be before OH!
+            'NH2': {'N': 1, 'H': 1},
+            'BH2': {'B': 1, 'H': 1},
+            'OH': {'O': 1},  # Must be last (catches remaining O)
         }
 
     def calculate_formation_energy(self, pristine_key: str, modified_key: str) -> FormationResult:
@@ -202,6 +218,16 @@ class FormationEnergyCalculator:
         """
         # Load molecular structure from computational database
         atoms = read(molecules_data[mol_key]["path"])
+
+        # Set cell and PBC (required by GPAW)
+        cell = molecules_data[mol_key]["cell"]
+        positions = atoms.get_positions()
+        center_of_mass = np.mean(positions, axis=0)
+        translation = np.array([cell / 2] * 3) - center_of_mass
+        atoms.set_positions(positions + translation)
+        atoms.set_cell([cell] * 3)
+        atoms.set_pbc(True)
+
         atoms.calc = self.calc  # Attach quantum mechanical calculator
 
         # Geometry optimization using BFGS algorithm
@@ -295,31 +321,22 @@ class FormationEnergyCalculator:
         groups = {}
         remaining = composition_diff.copy()  # Track unassigned atoms
 
-        # Pattern matching for known functional groups
-        # Uses greedy algorithm to maximize group identification
-        for fg_name, (elements, bonds) in self.fg_patterns.items():
-            # Calculate stoichiometric requirements for this functional group
-            pattern = {}
-            for elem in elements:
-                pattern[elem] = pattern.get(elem, 0) + 1
-
-            # Determine maximum possible number of this group
-            # Limited by availability of each required element
+        # Pattern matching using substitution patterns (functional group replaces H)
+        # This is the primary matching mode for functionalization
+        for fg_name, pattern in self.fg_substitution_patterns.items():
             max_matches = float('inf')
             for elem, needed in pattern.items():
                 available = remaining.get(elem, 0)
                 if available < needed:
-                    max_matches = 0  # Cannot form this group
+                    max_matches = 0
                     break
                 max_matches = min(max_matches, available // needed)
 
-            # Assign atoms to functional groups
             if max_matches > 0:
                 groups[fg_name] = max_matches
-                # Remove assigned atoms from remaining pool
                 for elem, needed in pattern.items():
                     remaining[elem] -= max_matches * needed
-                logger.info(f"Identified {max_matches} {fg_name} groups")
+                logger.info(f"Identified {max_matches} {fg_name} groups (H-substitution)")
 
         # Handle remaining atoms as individual species
         # These represent surface adsorption, substitutional doping, or vacancies
@@ -327,7 +344,7 @@ class FormationEnergyCalculator:
             if count != 0:
                 groups[f"{elem}_atom"] = count
                 if count > 0:
-                    logger.warning(f"GQD_functionalization_mols_energy_comparison.py (likely adsorbed): {count} {elem}")
+                    logger.warning(f"Unassigned atoms (likely adsorbed): {count} {elem}")
                 else:
                     logger.warning(f"Missing atoms (likely vacancy): {abs(count)} {elem}")
 
@@ -420,6 +437,13 @@ class FormationEnergyCalculator:
                 try:
                     # Quantum mechanical calculation of reference molecule
                     mol = molecule(mol_name)  # ASE molecule database
+
+                    # Set cell and PBC for GPAW compatibility
+                    # Use 15 Å box - large enough to avoid periodic interactions
+                    mol.set_cell([15.0, 15.0, 15.0])
+                    mol.center()  # Center molecule in the cell
+                    mol.set_pbc(True)
+
                     mol.calc = self.calc  # Apply same DFT method
 
                     # Optimize geometry for accurate energy
@@ -504,7 +528,7 @@ class FormationEnergyCalculator:
             raise ValueError(f"Unknown functional group: {functional_group}. Choose from {list(self.fg_patterns.keys())}")
 
         print(f"\n=== Running Functionalization Site Analysis for {functional_group} ===\n")
-        results_dir = f"func_map_{molecule_name}_{functional_group}"
+        results_dir = f"func_map_{molecule_name}_{functional_group}_{self.calc_name}"
         os.makedirs(results_dir, exist_ok=True)
 
         # Create subdirectories for structures and images
@@ -1005,7 +1029,10 @@ def main():
 
         calc = SevenNetCalculator('7net-l3i5', modal='mpa')
 
-    calculator = FormationEnergyCalculator(calc, fmax=0.005)
+    # Determine calculator name for result folders
+    calc_name = "GPAW" if system == "Linux" else "MLIP"
+
+    calculator = FormationEnergyCalculator(calc, fmax=0.005, calc_name=calc_name)
 
     # ============================================================
     # CONFIGURATION
@@ -1072,7 +1099,7 @@ def main():
 
             print(f"\n{'=' * 60}")
             print(f"Analysis complete!")
-            print(f"Results saved to: func_map_{molecule_name}_{functional_group}/")
+            print(f"Results saved to: func_map_{molecule_name}_{functional_group}_{calc_name}/")
             print(f"  - formation_energy_map.png: Visual energy map")
             print(f"  - energy_distribution.png: Statistical distribution")
             print(f"  - summary.txt: Detailed statistics")
