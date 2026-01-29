@@ -18,13 +18,13 @@ from utils import determine_target_element
 
 # Set global font properties for all plots
 mpl.rcParams['font.family'] = 'Times New Roman'
-mpl.rcParams['font.size'] = 12
-mpl.rcParams['axes.titlesize'] = 16
-mpl.rcParams['axes.labelsize'] = 14
-mpl.rcParams['xtick.labelsize'] = 12
-mpl.rcParams['ytick.labelsize'] = 12
-mpl.rcParams['legend.fontsize'] = 12
-mpl.rcParams['figure.titlesize'] = 18
+mpl.rcParams['font.size'] = 32
+mpl.rcParams['axes.titlesize'] = 32
+mpl.rcParams['axes.labelsize'] = 32
+mpl.rcParams['xtick.labelsize'] = 32
+mpl.rcParams['ytick.labelsize'] = 32
+mpl.rcParams['legend.fontsize'] = 32
+mpl.rcParams['figure.titlesize'] = 28
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -106,20 +106,6 @@ class FormationEnergyCalculator:
             'OH': (['O', 'H'], [('O', 'H', 0.97)]),  # Hydroxyl group
             'COOH': (['C', 'O', 'O', 'H'], [('C', 'O', 1.21), ('C', 'O', 1.36), ('O', 'H', 0.97)]),  # Carboxyl
             'BH2': (['B', 'H', 'H'], [('B', 'H', 1.19), ('H', 'B', 1.19)]),  # Borane group
-        }
-
-        # Net composition change when functional group replaces one H atom
-        # Used for pattern matching: full_group - 1H = net_change
-        # IMPORTANT: Order matters! Larger/more specific patterns must come first
-        # COOH replaces H: -H +COOH = +C +2O (must match before OH!)
-        # NH2 replaces H: -H +NH2 = +N +1H
-        # BH2 replaces H: -H +BH2 = +B +1H
-        # OH  replaces H: -H +OH  = +O (smallest, must be last)
-        self.fg_substitution_patterns = {
-            'COOH': {'C': 1, 'O': 2},  # Must be before OH!
-            'NH2': {'N': 1, 'H': 1},
-            'BH2': {'B': 1, 'H': 1},
-            'OH': {'O': 1},  # Must be last (catches remaining O)
         }
 
     def calculate_formation_energy(self, pristine_key: str, modified_key: str) -> FormationResult:
@@ -321,32 +307,41 @@ class FormationEnergyCalculator:
         groups = {}
         remaining = composition_diff.copy()  # Track unassigned atoms
 
-        # Pattern matching using substitution patterns (functional group replaces H)
-        # This is the primary matching mode for functionalization
-        for fg_name, pattern in self.fg_substitution_patterns.items():
+        # Pattern matching for known functional groups
+        # Uses greedy algorithm to maximize group identification
+        for fg_name, (elements, bonds) in self.fg_patterns.items():
+            # Calculate stoichiometric requirements for this functional group
+            pattern = {}
+            for elem in elements:
+                pattern[elem] = pattern.get(elem, 0) + 1
+
+            # Determine maximum possible number of this group
+            # Limited by availability of each required element
             max_matches = float('inf')
             for elem, needed in pattern.items():
                 available = remaining.get(elem, 0)
                 if available < needed:
-                    max_matches = 0
+                    max_matches = 0  # Cannot form this group
                     break
                 max_matches = min(max_matches, available // needed)
 
+            # Assign atoms to functional groups
             if max_matches > 0:
                 groups[fg_name] = max_matches
+                # Remove assigned atoms from remaining pool
                 for elem, needed in pattern.items():
                     remaining[elem] -= max_matches * needed
-                logger.info(f"Identified {max_matches} {fg_name} groups (H-substitution)")
+                # logger.info(f"Identified {max_matches} {fg_name} groups")
 
         # Handle remaining atoms as individual species
         # These represent surface adsorption, substitutional doping, or vacancies
         for elem, count in remaining.items():
             if count != 0:
                 groups[f"{elem}_atom"] = count
-                if count > 0:
-                    logger.warning(f"Unassigned atoms (likely adsorbed): {count} {elem}")
-                else:
-                    logger.warning(f"Missing atoms (likely vacancy): {abs(count)} {elem}")
+                # if count > 0:
+                    # logger.warning(f"GQD_functionalization_mols_energy_comparison.py (likely adsorbed): {count} {elem}")
+                # else:
+                    # logger.warning(f"Missing atoms (likely vacancy): {abs(count)} {elem}")
 
         return groups
 
@@ -437,9 +432,9 @@ class FormationEnergyCalculator:
                 try:
                     # Quantum mechanical calculation of reference molecule
                     mol = molecule(mol_name)  # ASE molecule database
-
-                    # Set cell and PBC for GPAW compatibility
-                    # Use 15 Å box - large enough to avoid periodic interactions
+                    #
+                    # # Set cell and PBC for GPAW compatibility
+                    # # Use 15 Å box - large enough to avoid periodic interactions
                     mol.set_cell([15.0, 15.0, 15.0])
                     mol.center()  # Center molecule in the cell
                     mol.set_pbc(True)
@@ -1032,7 +1027,7 @@ def main():
     # Determine calculator name for result folders
     calc_name = "GPAW" if system == "Linux" else "MLIP"
 
-    calculator = FormationEnergyCalculator(calc, fmax=0.005, calc_name=calc_name)
+    calculator = FormationEnergyCalculator(calc, fmax=0.5, calc_name=calc_name)
 
     # ============================================================
     # CONFIGURATION
@@ -1045,28 +1040,28 @@ def main():
     if mode == "legacy":
         print("\n1. LEGACY MODE - Pre-existing functionalized GQD:")
 
-        #  Groups autodetect:  NH2, OH,exp COOH
+        #  Groups autodetect:  NH2, OH, COOH
         result = calculator.calculate_formation_energy(
-            pristine_key="GQD_TRIANGLE_3",  # Clean graphene quantum dot
-            modified_key="GQD_TRIANGLE_3_nh2_cooh_oh_o"  # functionalized GQD
+            pristine_key="GQD_HEX_2_2",  # Clean graphene quantum dot
+            modified_key="GQD_HEX_2_2_OH"  # functionalized GQD
         )
 
         print(f"\n{'=' * 50}")
         print("QUANTUM MECHANICAL FORMATION ENERGY ANALYSIS")
         print(f"{'=' * 50}")
         print(f"Formation Energy: {result.formation_energy:.4f} ± {result.uncertainty:.4f} eV")
-        print(f"Identified Chemical Species: {result.groups}")
+        # print(f"Identified Chemical Species: {result.groups}")
 
         # Energy component breakdown for understanding thermodynamic cycle
         print(f"\nTHERMODYNAMIC CYCLE COMPONENTS:")
         for comp, value in result.components.items():
             print(f"  {comp}: {value:.4f} eV")
 
-        # Validation results for data quality assessment
-        if result.validation_flags:
-            print(f"\nVALIDATION WARNINGS: {result.validation_flags}")
-        else:
-            print(f"\nVALIDATION: ✓ All physical checks passed")
+        # # Validation results for data quality assessment
+        # if result.validation_flags:
+        #     print(f"\nVALIDATION WARNINGS: {result.validation_flags}")
+        # else:
+        #     print(f"\nVALIDATION: ✓ All physical checks passed")
 
     # ============================================================
     # MODE 2: NEW - Automatically analyze all edge H functionalization sites
