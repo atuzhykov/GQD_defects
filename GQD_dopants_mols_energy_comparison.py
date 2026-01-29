@@ -172,16 +172,18 @@ class DopingFormationCalculator:
     This allows comparison between different cell sizes and concentrations.
     """
 
-    def __init__(self, calculator, fmax=0.05):
+    def __init__(self, calculator, fmax=0.05, calc_name="MLIP"):
         """
         Initialize calculator with quantum mechanical parameters.
 
         Args:
             calculator: DFT calculator (e.g., SevenNet)
             fmax: Force convergence criterion [eV/Å]
+            calc_name: Name of the calculator for result folder naming (e.g., "GPAW" or "MLIP")
         """
         self.calc = calculator
         self.fmax = fmax
+        self.calc_name = calc_name
         self.energy_cache = {}  # Cache for calculated energies
 
         # Chemical potentials with uncertainties [eV]
@@ -385,6 +387,15 @@ class DopingFormationCalculator:
         # Load structure
         mol_path = molecules_data[mol_key]["path"]
         atoms = read(mol_path)
+
+        # Set cell and PBC (required by GPAW)
+        cell = molecules_data[mol_key]["cell"]
+        positions = atoms.get_positions()
+        center_of_mass = np.mean(positions, axis=0)
+        translation = np.array([cell / 2] * 3) - center_of_mass
+        atoms.set_positions(positions + translation)
+        atoms.set_cell([cell] * 3)
+        atoms.set_pbc(True)
 
         # Read and store original bonds if MOL file
         if mol_path.endswith('.mol'):
@@ -630,7 +641,7 @@ class DopingFormationCalculator:
 
         suffix = "_with_H" if replace_H else ""
         print(f"\n=== Running Doping Site Analysis for {dopant_element} {'(including H)' if replace_H else ''} ===\n")
-        results_dir = f"doping_map_{molecule_name}_{dopant_element}{suffix}"
+        results_dir = f"doping_map_{molecule_name}_{dopant_element}{suffix}_{self.calc_name}"
         os.makedirs(results_dir, exist_ok=True)
 
         # Create subdirectories for structures (separate folders for XYZ and MOL) and images
@@ -954,8 +965,11 @@ def main():
 
         calc = SevenNetCalculator('7net-l3i5', modal='mpa')
 
+    # Determine calculator name for result folders
+    calc_name = "GPAW" if system == "Linux" else "MLIP"
+
     # Create calculator
-    calculator = DopingFormationCalculator(calc, fmax=0.05)
+    calculator = DopingFormationCalculator(calc, fmax=0.05, calc_name=calc_name)
 
     # ============================================================
     # CONFIGURATION
@@ -973,7 +987,7 @@ def main():
         doped_key = "GQD_TRIANGLE_3_min_C_added_N"
 
         # Create results directory for legacy mode
-        results_dir = f"legacy_doping_{pristine_key}_vs_{doped_key}"
+        results_dir = f"legacy_doping_{pristine_key}_vs_{doped_key}_{calculator.calc_name}"
 
         result = calculator.calculate_doping_energy(
             pristine_key=pristine_key,
@@ -1028,7 +1042,7 @@ def main():
 
         print(f"\n{'=' * 60}")
         print(f"Analysis complete!")
-        print(f"Results saved to: doping_map_{molecule_name}_{dopant_element}/")
+        print(f"Results saved to: doping_map_{molecule_name}_{dopant_element}_{calc_name}/")
         print(f"  - formation_energy_map.png: Visual energy map")
         print(f"  - energy_distribution.png: Statistical distribution")
         print(f"  - summary.txt: Detailed statistics")
