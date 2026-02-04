@@ -765,7 +765,7 @@ if __name__ == "__main__":
     analyzer = GPAWAnalyzer(
         molecule_name=molecule_name,
         xc='PBE',
-        mode_cutoff=300,
+        mode_cutoff=500,
         kpts=(1, 1, 1),
         spinpol=True
     )

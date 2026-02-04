@@ -289,14 +289,12 @@ class DopingFormationCalculator:
             os.makedirs(structures_xyz_dir, exist_ok=True)
             os.makedirs(structures_mol_dir, exist_ok=True)
 
-            # Import save functions from map.py or this file
-            from map import save_structure_file
 
             # Save pristine structure
             pristine_xyz = os.path.join(structures_xyz_dir, f"{pristine_key}_relaxed.xyz")
             pristine_mol = os.path.join(structures_mol_dir, f"{pristine_key}_relaxed.mol")
             pristine_bonds = atoms_pristine.info.get('original_bonds', None)
-            save_structure_file(atoms_pristine, pristine_xyz, pristine_mol, original_bonds=pristine_bonds)
+            #save_structure_file(atoms_pristine, pristine_xyz, pristine_mol, original_bonds=pristine_bonds)
             logger.info(f"Saved pristine structure: {pristine_xyz} and {pristine_mol}")
 
             # Save doped structure
@@ -332,19 +330,19 @@ class DopingFormationCalculator:
                 f.write("Energy Components:\n")
                 f.write(f"  E(pristine): {components['E_pristine']:.6f} eV\n")
                 f.write(f"  E(doped):    {components['E_doped']:.6f} eV\n")
-                f.write(f"  ΔE:          {components['delta_E']:.6f} eV\n\n")
+                f.write(f"  delta_E:          {components['delta_E']:.6f} eV\n\n")
 
                 f.write("Chemical Potentials:\n")
                 if 'mu_host' in components:
-                    f.write(f"  μ(host) × n:   +{components['mu_host']:.6f} eV\n")
+                    f.write(f"  mu(host) x n:   +{components['mu_host']:.6f} eV\n")
                 if 'mu_dopant' in components:
-                    f.write(f"  μ(dopant) × n: -{components['mu_dopant']:.6f} eV\n")
+                    f.write(f"  mu(dopant) x n: -{components['mu_dopant']:.6f} eV\n")
                 f.write(f"  Total correction: {components['mu_correction']:.6f} eV\n\n")
 
                 f.write("=" * 70 + "\n")
                 f.write("RESULTS:\n")
-                f.write(f"  ΔE_f (total cell):     {formation_energy_total:.6f} eV\n")
-                f.write(f"  ΔE_f (per dopant):     {formation_energy_per_dopant:.6f} ± {uncertainty_per_dopant:.6f} eV\n")
+                f.write(f"  delta_f (total cell):     {formation_energy_total:.6f} eV\n")
+                f.write(f"  delta_f (per dopant):     {formation_energy_per_dopant:.6f} ± {uncertainty_per_dopant:.6f} eV\n")
                 f.write("=" * 70 + "\n\n")
 
                 if validation_flags:
@@ -352,7 +350,7 @@ class DopingFormationCalculator:
                     for flag in validation_flags:
                         f.write(f"  - {flag}\n")
                 else:
-                    f.write("VALIDATION: ✓ All physical checks passed\n")
+                    f.write("VALIDATION: All physical checks passed\n")
 
                 f.write("\n" + "=" * 70 + "\n")
 
@@ -399,7 +397,6 @@ class DopingFormationCalculator:
 
         # Read and store original bonds if MOL file
         if mol_path.endswith('.mol'):
-            from map import read_bonds_from_mol  # Import from map.py
             original_bonds = read_bonds_from_mol(mol_path)
             if original_bonds:
                 atoms.info['original_bonds'] = original_bonds
@@ -940,7 +937,7 @@ def main():
 
         calc = GPAW(
             xc='PBE',
-            mode=PW(300),  # Reduced from 400 - still reasonable for C-C bond breaking
+            mode=PW(500),  # Reduced from 400 - still reasonable for C-C bond breaking
             kpts=(1, 1, 1),
             symmetry='off',
             spinpol=True,  # Keep this - essential for radicals
@@ -974,7 +971,7 @@ def main():
     # ============================================================
     # CONFIGURATION
     # ============================================================
-    mode = "automated"  # "legacy" or "automated"
+    mode = "legacy"  # "legacy" or "automated"
 
     # ============================================================
     # MODE 1: Legacy - Compare pre-existing doped molecules
@@ -983,8 +980,8 @@ def main():
         # Common dopants: 'N' 'B' 'P' 'S' 'O' 'F'
         print("\n1. LEGACY MODE - DOPED GQD:")
 
-        pristine_key = "GQD_TRIANGLE_3"
-        doped_key = "GQD_TRIANGLE_3_min_C_added_N"
+        pristine_key = "GQD_HEX_2_2"
+        doped_key = "GQD_HEX_2_2_NH2"
 
         # Create results directory for legacy mode
         results_dir = f"legacy_doping_{pristine_key}_vs_{doped_key}_{calculator.calc_name}"

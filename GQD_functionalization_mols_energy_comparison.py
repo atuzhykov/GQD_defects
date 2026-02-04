@@ -999,7 +999,7 @@ def main():
 
         calc = GPAW(
             xc='PBE',
-            mode=PW(300),
+            mode=PW(500),
             kpts=(1, 1, 1),
             symmetry='off',
             spinpol=True,
