@@ -1017,12 +1017,12 @@ def main():
         print(f"Running on {system} - using SevenNet calculator")
         from sevenn.calculator import SevenNetCalculator
 
-        calc = SevenNetCalculator('7net-l3i5', modal='mpa')
+        calc = SevenNetCalculator('7net-omni-i12', modal='mpa')
     else:
         print(f"Warning: Running on {system} - defaulting to SevenNet calculator")
         from sevenn.calculator import SevenNetCalculator
 
-        calc = SevenNetCalculator('7net-l3i5', modal='mpa')
+        calc = SevenNetCalculator('7net-omni-i12', modal='mpa')
 
     # Determine calculator name for result folders
     calc_name = "GPAW" if system == "Linux" else "MLIP"

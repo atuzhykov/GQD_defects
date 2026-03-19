@@ -1039,8 +1039,8 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
 
 if __name__ == "__main__":
     # Configuration - modify these values directly
-    molecule_name = "GQD_HEXAGON_3_3"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
-    defect_type = "all"     # Choose 'vacancy', 'divacancy', 'stw', or 'all'
+    molecule_name = "GQD_HEX_2_2"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
+    defect_type = "vacancy"     # Choose 'vacancy', 'divacancy', 'stw', or 'all'
     show_atom_idx = True    # Set to False to hide atom indices in visualizations
     atom_idx_fontsize = 8   # Font size for atom index labels (increase for larger text)
     # Element-specific distances
@@ -1097,7 +1097,7 @@ if __name__ == "__main__":
             from sevenn.calculator import SevenNetCalculator
 
             # "mpa" refers to the MPtrj + sAlex modal, used for evaluating Matbench Discovery.
-            calc = SevenNetCalculator('7net-l3i5', modal='mpa')
+            calc = SevenNetCalculator('7net-omni-i12', modal='mpa')
             print("Using SevenNet calculator on Windows")
 
         else:
