@@ -12,7 +12,8 @@ from utils import (
     rotate_bond_transform,
     delete_atoms_transform,
     move_atom_transform,
-    get_distance, calculate_formation_energy, write_traj_xyz, save_structure
+    get_distance, calculate_formation_energy, write_traj_xyz, save_structure,
+    find_bonded_H, calculate_mu_H, calculate_element_mu
 )
 
 # ============= DEBUG MODE =============
@@ -102,50 +103,13 @@ ENABLE_SPLIT_VACANCY = False    # Move one atom to middle, remove other
 ENABLE_STONE_WALES = False      # Bond rotation (Stone-Wales defect)
 
 
+# ============= CHEMICAL POTENTIALS =============
+element_mu = calculate_element_mu(calc, 'C')
+mu_H = calculate_mu_H(calc)
+
 # ============= TRANSFORM DEFINITIONS =============
+# Transforms are built after relaxation inside if not DEBUG_MODE (atoms must be relaxed first)
 transforms_config = []
-
-# 1. Single Vacancy - removes first atom in pair
-if ENABLE_VACANCY:
-    transforms_config.append({
-        'name': 'vacancy',
-        'transforms': [delete_atoms_transform(axis_atoms[0])]
-    })
-
-# 2. Divacancy - removes both atoms in pair
-if ENABLE_DIVACANCY:
-    transforms_config.append({
-        'name': 'divacancy',
-        'transforms': [delete_atoms_transform([axis_atoms[0], axis_atoms[1]])]
-    })
-
-# 3. Split Vacancy - move one atom to bond midpoint, then remove other
-if ENABLE_SPLIT_VACANCY:
-    transforms_config.append({
-        'name': 'split_vacancy',
-        'transforms': [
-            move_atom_transform(
-                atom_idx=axis_atoms[0],
-                axis_atom1_idx=axis_atoms[0],
-                axis_atom2_idx=axis_atoms[1],
-                distance=get_distance(atoms, axis_atoms[0], axis_atoms[1]) / 2
-            ),
-            delete_atoms_transform([axis_atoms[1]])
-        ]
-    })
-
-# 4. Stone-Wales Transformation - 90° bond rotation
-if ENABLE_STONE_WALES:
-    transforms_config.append({
-        'name': 'stone_wales',
-        'transforms': [
-            rotate_bond_transform(
-                atom1_idx=axis_atoms[0],
-                atom2_idx=axis_atoms[1],
-                angle_degrees=90
-            )
-        ]
-    })
 
 
 # ============= EXECUTION =============
@@ -221,7 +185,7 @@ def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, ra
     write_traj_xyz(os.path.join(experiment_dir, 'core_trajectory.traj'),
                    os.path.join(experiment_dir, 'core_trajectory.xyz'))
 
-    formation_energy = calculate_formation_energy(atoms, modified_atoms, calc, -9.214)
+    formation_energy = calculate_formation_energy(atoms, modified_atoms, calc, element_mu, mu_H=mu_H)
     with open(os.path.join(experiment_dir, "analysis_output.txt"), "w", encoding="utf-8") as file:
         file.write("Calculation Setup Analysis:\n")
         file.write(f"Formation Energy: {formation_energy:.3f} eV")
@@ -294,6 +258,47 @@ if not DEBUG_MODE:
 
         # Also save to root directory for compatibility
         atoms.write(f"relaxed_{molecule_name}.xyz")
+
+    # Build transforms now — atoms is relaxed at this point
+    if ENABLE_VACANCY:
+        _h_v = find_bonded_H(atoms, axis_atoms[0])
+        transforms_config.append({
+            'name': 'vacancy',
+            'transforms': [delete_atoms_transform([axis_atoms[0]] + _h_v)]
+        })
+
+    if ENABLE_DIVACANCY:
+        _h_vv = find_bonded_H(atoms, [axis_atoms[0], axis_atoms[1]])
+        transforms_config.append({
+            'name': 'divacancy',
+            'transforms': [delete_atoms_transform([axis_atoms[0], axis_atoms[1]] + _h_vv)]
+        })
+
+    if ENABLE_SPLIT_VACANCY:
+        transforms_config.append({
+            'name': 'split_vacancy',
+            'transforms': [
+                move_atom_transform(
+                    atom_idx=axis_atoms[0],
+                    axis_atom1_idx=axis_atoms[0],
+                    axis_atom2_idx=axis_atoms[1],
+                    distance=get_distance(atoms, axis_atoms[0], axis_atoms[1]) / 2
+                ),
+                delete_atoms_transform([axis_atoms[1]])
+            ]
+        })
+
+    if ENABLE_STONE_WALES:
+        transforms_config.append({
+            'name': 'stone_wales',
+            'transforms': [
+                rotate_bond_transform(
+                    atom1_idx=axis_atoms[0],
+                    atom2_idx=axis_atoms[1],
+                    angle_degrees=90
+                )
+            ]
+        })
 
     # Run each enabled transformation
     print(f"\n{'='*60}")

@@ -17,8 +17,9 @@ from matplotlib.colors import LinearSegmentedColormap
 from scipy import stats
 
 from config import molecules_data
-from utils import delete_atom_by_idx, rotate_bond_transform, calculate_formation_energy, calculate_element_mu, \
-    determine_target_element
+from utils import (delete_atom_by_idx, rotate_bond_transform, calculate_formation_energy,
+                   calculate_element_mu, determine_target_element,
+                   find_bonded_H, calculate_mu_H)
 
 # Set global font properties for all plots
 mpl.rcParams['font.family'] = 'Times New Roman'
@@ -170,7 +171,7 @@ def setup_structure(molecule_name):
     return base_relaxed, base_energy
 
 
-def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8):
+def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=0.0, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8):
     """Analyze single vacancy formation energies"""
     print("\n=== Running Vacancy Analysis ===\n")
     results_dir = f"vacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
@@ -202,8 +203,14 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
         atom_indices.append(atom_idx)
 
         try:
-            # Create a vacancy by removing this atom - always start from the base relaxed structure
-            vacancy_atoms = delete_atom_by_idx(base_relaxed.copy(), atom_idx)
+            # Find H atoms bonded to this C atom (will be removed together with C)
+            bonded_h = find_bonded_H(base_relaxed, atom_idx)
+            all_to_remove = [atom_idx] + bonded_h
+            if bonded_h:
+                print(f"  Removing C[{atom_idx}] + bonded H{bonded_h}")
+
+            # Create a vacancy by removing this atom and its bonded H
+            vacancy_atoms = delete_atom_by_idx(base_relaxed.copy(), all_to_remove)
 
             # Set up calculator for vacancy structure
             vacancy_atoms.set_calculator(calc)
@@ -213,8 +220,9 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
             optimizer = BFGS(vacancy_atoms)
             optimizer.run(fmax=0.05)
 
-            # Calculate formation energy
-            formation_energy = calculate_formation_energy(base_relaxed, vacancy_atoms, calc, element_mu)
+            # Calculate formation energy (include mu_H if H was removed)
+            _mu_H = mu_H if bonded_h else 0.0
+            formation_energy = calculate_formation_energy(base_relaxed, vacancy_atoms, calc, element_mu, mu_H=_mu_H)
 
             formation_energies.append(formation_energy)
             print(f"  Atom {atom_idx} formation energy: {formation_energy:.3f} eV")
@@ -224,16 +232,18 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
             mol_file = os.path.join(structures_mol_dir, f"vacancy_atom_{atom_idx}.mol")
             image_file = os.path.join(images_dir, f"vacancy_atom_{atom_idx}.png")
 
-            # Adjust bonds for removed atom
+            # Adjust bonds for removed C + H atoms
             original_bonds = base_relaxed.info.get('original_bonds', None)
             adjusted_bonds = None
             if original_bonds:
+                removed_set = set(all_to_remove)
+                removed_sorted = sorted(all_to_remove)
                 adjusted_bonds = []
                 for a1, a2, btype in original_bonds:
-                    if a1 == atom_idx or a2 == atom_idx:
+                    if a1 in removed_set or a2 in removed_set:
                         continue
-                    new_a1 = a1 if a1 < atom_idx else a1 - 1
-                    new_a2 = a2 if a2 < atom_idx else a2 - 1
+                    new_a1 = a1 - sum(1 for r in removed_sorted if r < a1)
+                    new_a2 = a2 - sum(1 for r in removed_sorted if r < a2)
                     adjusted_bonds.append((new_a1, new_a2, btype))
 
             save_structure_file(vacancy_atoms, xyz_file, mol_file, original_bonds=adjusted_bonds)
@@ -253,7 +263,7 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
     return atom_indices, formation_energies
 
 
-def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, max_distance=1.5, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8):
+def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=0.0, max_distance=1.5, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8):
     """Analyze divacancy formation energies"""
     print("\n=== Running Divacancy Analysis ===\n")
     results_dir = f"divacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
@@ -293,8 +303,14 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
         divacancy_pairs.append((atom_idx1, atom_idx2))
 
         try:
-            # Create a divacancy by removing these atoms - always start from the base relaxed structure
-            divacancy_atoms = delete_atom_by_idx(base_relaxed.copy(), [atom_idx1, atom_idx2])
+            # Find H atoms bonded to both removed C atoms
+            bonded_h = find_bonded_H(base_relaxed, [atom_idx1, atom_idx2])
+            all_to_remove = [atom_idx1, atom_idx2] + bonded_h
+            if bonded_h:
+                print(f"  Removing C[{atom_idx1},{atom_idx2}] + bonded H{bonded_h}")
+
+            # Create a divacancy by removing C atoms and their bonded H
+            divacancy_atoms = delete_atom_by_idx(base_relaxed.copy(), all_to_remove)
 
             # Set up calculator for divacancy structure
             divacancy_atoms.set_calculator(calc)
@@ -304,12 +320,10 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
             optimizer = BFGS(divacancy_atoms)
             optimizer.run(fmax=0.05)
 
-            # Get divacancy energy
-            divacancy_energy = divacancy_atoms.get_potential_energy()
-
-            # Calculate formation energy
-            mu_C = base_energy / len(base_relaxed)  # Chemical potential of carbon
-            formation_energy = divacancy_energy - (len(divacancy_atoms) * mu_C)
+            # Calculate formation energy (consistent formula with vacancy)
+            _mu_H = mu_H if bonded_h else 0.0
+            formation_energy = calculate_formation_energy(
+                base_relaxed, divacancy_atoms, calc, element_mu, mu_H=_mu_H)
 
             formation_energies.append(formation_energy)
             print(f"  Divacancy {atom_idx1}-{atom_idx2} formation energy: {formation_energy:.3f} eV")
@@ -319,17 +333,18 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
             mol_file = os.path.join(structures_mol_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.mol")
             image_file = os.path.join(images_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.png")
 
-            # Adjust bonds for two removed atoms
+            # Adjust bonds for removed C + H atoms
             original_bonds = base_relaxed.info.get('original_bonds', None)
             adjusted_bonds = None
             if original_bonds:
+                removed_set = set(all_to_remove)
+                removed_sorted = sorted(all_to_remove)
                 adjusted_bonds = []
-                removed = sorted([atom_idx1, atom_idx2])
                 for a1, a2, btype in original_bonds:
-                    if a1 in removed or a2 in removed:
+                    if a1 in removed_set or a2 in removed_set:
                         continue
-                    new_a1 = a1 - sum(1 for r in removed if r < a1)
-                    new_a2 = a2 - sum(1 for r in removed if r < a2)
+                    new_a1 = a1 - sum(1 for r in removed_sorted if r < a1)
+                    new_a2 = a2 - sum(1 for r in removed_sorted if r < a2)
                     adjusted_bonds.append((new_a1, new_a2, btype))
 
             save_structure_file(divacancy_atoms, xyz_file, mol_file, original_bonds=adjusted_bonds)
@@ -1039,8 +1054,8 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
 
 if __name__ == "__main__":
     # Configuration - modify these values directly
-    molecule_name = "GQD_HEX_2_2"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
-    defect_type = "vacancy"     # Choose 'vacancy', 'divacancy', 'stw', or 'all'
+    molecule_name = "input_pyrene_C16H10"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
+    defect_type = "all"     # Choose 'vacancy', 'divacancy', 'stw', or 'all'
     show_atom_idx = True    # Set to False to hide atom indices in visualizations
     atom_idx_fontsize = 8   # Font size for atom index labels (increase for larger text)
     # Element-specific distances
@@ -1108,12 +1123,16 @@ if __name__ == "__main__":
         # Setup initial structure
         base_relaxed, base_energy = setup_structure(molecule_name)
 
+        # Chemical potential of H — referenced to H₂ gas (½ × E(H₂)), analogous to μ_C from graphene
+        mu_H = calculate_mu_H(calc)
+        print(f"Chemical potential for H (0.5*E(H2) reference): {mu_H:.3f} eV")
+
         # Run selected analysis
         if defect_type == 'vacancy' or defect_type == 'all':
-            analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize)
+            analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=mu_H, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize)
 
         if defect_type == 'divacancy' or defect_type == 'all':
-            analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name,
+            analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=mu_H,
                                max_distance=div_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize)
 
         if defect_type == 'stw' or defect_type == 'all':

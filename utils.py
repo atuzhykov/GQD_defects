@@ -8,6 +8,41 @@ from ase.io import read
 from ase.optimize import FIRE
 
 
+def calculate_mu_H(calculator=None):
+    """
+    Chemical potential of hydrogen: ½ × E(H₂), PBE reference.
+    Hardcoded to PBE/PW value.
+    """
+    return -3.382  # eV, ½ × E(H₂) at PBE level
+
+
+def find_bonded_H(atoms, c_indices, cutoff=1.2):
+    """
+    Find H atoms bonded to any of the specified C atom indices.
+
+    Parameters:
+    atoms: ASE Atoms object
+    c_indices: int or list of ints — C atom indices whose bonded H to find
+    cutoff: float — C-H bond cutoff in Å (default 1.2)
+
+    Returns:
+    list of int — indices of H atoms bonded to any of c_indices
+    """
+    if isinstance(c_indices, int):
+        c_indices = [c_indices]
+    c_set = set(c_indices)
+    h_indices = []
+    for i, atom in enumerate(atoms):
+        if atom.symbol != 'H':
+            continue
+        for ci in c_set:
+            d = np.linalg.norm(atoms.positions[i] - atoms.positions[ci])
+            if d < cutoff:
+                h_indices.append(i)
+                break
+    return h_indices
+
+
 def calculate_mu_C(calculator):
     """
     Calculate the chemical potential of carbon from perfect graphene.
@@ -226,7 +261,7 @@ def write_traj_xyz(traj_path, output_file):
 
 
 
-def calculate_formation_energy(perfect, defective, calculator, mu_C):
+def calculate_formation_energy(perfect, defective, calculator, mu_C, mu_H=0.0):
     """
     Calculate formation energy for defects in graphene quantum dots (GQDs).
 
@@ -333,18 +368,21 @@ def calculate_formation_energy(perfect, defective, calculator, mu_C):
     E_perfect = perfect.get_potential_energy()
     E_defective = defective.get_potential_energy()
 
-    # Count number of carbon atoms
-    N_C_perfect = sum(1 for atom in perfect if atom.symbol == 'C')
+    # Count removed C and H atoms
+    N_C_perfect   = sum(1 for atom in perfect   if atom.symbol == 'C')
     N_C_defective = sum(1 for atom in defective if atom.symbol == 'C')
+    N_H_perfect   = sum(1 for atom in perfect   if atom.symbol == 'H')
+    N_H_defective = sum(1 for atom in defective if atom.symbol == 'H')
 
-    n_removed = N_C_perfect - N_C_defective
+    n_C_removed = N_C_perfect - N_C_defective
+    n_H_removed = N_H_perfect - N_H_defective
 
-    if n_removed == 0:
-        # For Stone-Wales defect
+    if n_C_removed == 0:
+        # Stone-Wales: no atoms removed
         E_form = E_defective - E_perfect
     else:
-        # For vacancies and divacancies
-        E_form = E_defective - E_perfect + n_removed * mu_C
+        # Vacancy / divacancy: account for removed C and any removed H
+        E_form = E_defective - E_perfect + n_C_removed * mu_C + n_H_removed * mu_H
 
     return E_form
 
