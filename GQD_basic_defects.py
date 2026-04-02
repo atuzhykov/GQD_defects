@@ -25,11 +25,13 @@ DEBUG_MODE = False
 # Set False to always relax from scratch
 USE_SAVED_RELAXED = True
 RELAXED_STRUCTURES_DIR = "relaxed_structures"  # Directory for saved structures
+FMAX = 0.05
+BFGS_MAXSTEP = 0.1  # Max BFGS step size (Å). Default ASE=0.2; use 0.1 for GPAW defects to prevent SCF divergence.
 
 
 # ============= CALCULATOR SETUP =============
 def setup_calculator():
-    """Initialize calculator based on operating system."""
+    """Initialize calculator based on operating system. Returns (calc, calc_name)."""
     system = platform.system()
 
     if system == "Linux":
@@ -52,73 +54,30 @@ def setup_calculator():
             maxiter=500,
             txt='calculation.txt',
         )
+        calc_name = 'gpaw'
     elif system == "Windows":
         print(f"Running on {system} - using SevenNet calculator")
         from sevenn.calculator import SevenNetCalculator
 
         calc = SevenNetCalculator('7net-omni-i12', modal='mpa')
+        calc_name = '7net-omni-i12'
     else:
         print(f"Warning: Running on {system} - defaulting to SevenNet calculator")
         from sevenn.calculator import SevenNetCalculator
 
         calc = SevenNetCalculator('7net-omni-i12', modal='mpa')
+        calc_name = '7net-omni-i12'
 
-    return calc
-
-
-# Initialize calculator
-calc = setup_calculator()
-
-
-# ============= MOLECULE SETUP =============
-# Choose which molecule to work with from config.py
-molecule_name = "GQD_HEXAGON_3_3"
-mol_filename = molecules_data[molecule_name]["path"]
-cell = molecules_data[molecule_name]["cell"]
-
-# Read molecule and center it in the cell
-atoms = read(mol_filename)
-positions = atoms.get_positions()
-center_of_mass = np.mean(positions, axis=0)
-translation = np.array([cell / 2] * 3) - center_of_mass
-positions = [list(np.array(pos) + translation) for pos in positions]
-atoms.set_positions(positions)
-atoms.set_cell([cell] * 3)
-atoms.set_pbc(True)
-
-if DEBUG_MODE:
-    view(atoms)
-
-
-# ============= DEFECT CONFIGURATION =============
-# Choose which atoms define the defect axis
-# Use DEBUG_MODE to visualize atom indices
-axis_atoms = (32, 16)  # Change these based on your molecule
-
-# ============= TRANSFORM SELECTION =============
-# Enable/disable specific defect types by setting to True/False
-ENABLE_VACANCY = True          # Single atom removal
-ENABLE_DIVACANCY = False        # Remove both atoms in pair
-ENABLE_SPLIT_VACANCY = False    # Move one atom to middle, remove other
-ENABLE_STONE_WALES = False      # Bond rotation (Stone-Wales defect)
-
-
-# ============= CHEMICAL POTENTIALS =============
-element_mu = calculate_element_mu(calc, 'C')
-mu_H = calculate_mu_H(calc)
-
-# ============= TRANSFORM DEFINITIONS =============
-# Transforms are built after relaxation inside if not DEBUG_MODE (atoms must be relaxed first)
-transforms_config = []
+    return calc, calc_name
 
 
 # ============= EXECUTION =============
-def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, radius=8,
+def track_core_structure(fmax, atoms, transforms, calc, element_mu, mu_H,
+                         central_atom_index=0, radius=8,
                          task_name="core_tracking", fix_ends=False, fixed_atoms=[]):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     experiment_dir = os.path.join(f"experiments", f"{task_name}_{timestamp}")
     os.makedirs(experiment_dir, exist_ok=True)
-
 
     fixed_indices = []
     if fix_ends:
@@ -130,6 +89,9 @@ def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, ra
 
     c = FixAtoms(indices=fixed_indices+fixed_atoms)
     atoms.set_constraint(c)
+
+    # Save central position before transforms — index may become invalid after atom deletions
+    central_pos = atoms.positions[central_atom_index].copy()
 
     initial_distances = atoms.get_distances(central_atom_index, range(len(atoms)))
     initial_core_mask = initial_distances <= radius
@@ -151,8 +113,9 @@ def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, ra
     for transform in transforms:
         modified_atoms = transform(modified_atoms)
 
-    # Create a mask for the core atoms after transformations
-    distances = modified_atoms.get_distances(central_atom_index, range(len(modified_atoms)))
+    # Create a mask for the core atoms after transformations.
+    # Use saved central_pos (not index) so deletions don't invalidate the reference.
+    distances = np.linalg.norm(modified_atoms.positions - central_pos, axis=1)
     core_mask = distances <= radius
 
     modified_atoms.set_calculator(calc)
@@ -166,18 +129,15 @@ def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, ra
         full_traj.write(atoms)
         core_traj.write(core_atoms)
 
-
-    dyn = BFGS(modified_atoms)
+    dyn = BFGS(modified_atoms, maxstep=BFGS_MAXSTEP)
     dyn.attach(save_core_state, interval=1)
 
     dyn.run(fmax=fmax)
 
-
-    save_core_state(modified_atoms)
-
-    # Close trajectories
+    # Close trajectories (save_core_state already wrote the final frame via dyn.attach)
     full_traj.close()
     core_traj.close()
+    initial_core_traj.close()
 
     # Convert to xyz
     write_traj_xyz(os.path.join(experiment_dir, 'full_trajectory.traj'),
@@ -186,6 +146,7 @@ def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, ra
                    os.path.join(experiment_dir, 'core_trajectory.xyz'))
 
     formation_energy = calculate_formation_energy(atoms, modified_atoms, calc, element_mu, mu_H=mu_H)
+
     with open(os.path.join(experiment_dir, "analysis_output.txt"), "w", encoding="utf-8") as file:
         file.write("Calculation Setup Analysis:\n")
         file.write(f"Formation Energy: {formation_energy:.3f} eV")
@@ -193,161 +154,229 @@ def track_core_structure(fmax, atoms, transforms, calc, central_atom_index=0, ra
     return modified_atoms
 
 
-if not DEBUG_MODE:
-    # Set up calculator and optimization parameters
-    fmax = 0.5  # Maximum force criterion for optimization
+if __name__ == "__main__":
+    # Initialize calculator
+    calc, calc_name = setup_calculator()
 
-    # Create directory for relaxed structures if it doesn't exist
-    os.makedirs(RELAXED_STRUCTURES_DIR, exist_ok=True)
+    # ============= MOLECULE SETUP =============
+    # Choose which molecule to work with from config.py
+    molecule_name = "input_pyrene_C16H10"
+    mol_filename = molecules_data[molecule_name]["path"]
+    cell = molecules_data[molecule_name]["cell"]
 
-    # Determine calculator type for file naming
-    calc_name = "GPAW" if platform.system() == "Linux" else "SevenNet"
-    relaxed_file = os.path.join(
-        RELAXED_STRUCTURES_DIR,
-        f"relaxed_{molecule_name}_{calc_name}_fmax_{fmax}.xyz"
-    )
+    # Read molecule and center it in the cell
+    atoms = read(mol_filename)
+    positions = atoms.get_positions()
+    center_of_mass = np.mean(positions, axis=0)
+    translation = np.array([cell / 2] * 3) - center_of_mass
+    positions = [list(np.array(pos) + translation) for pos in positions]
+    atoms.set_positions(positions)
+    atoms.set_cell([cell] * 3)
+    atoms.set_pbc(True)
 
-    # Check if we should use saved relaxed structure
-    if USE_SAVED_RELAXED and os.path.exists(relaxed_file):
-        print(f"\n{'='*60}")
-        print(f"Loading saved relaxed structure from:")
-        print(f"  {relaxed_file}")
-        print(f"{'='*60}\n")
+    if DEBUG_MODE:
+        view(atoms)
 
-        # Load relaxed structure
-        atoms = read(relaxed_file)
-        atoms.set_calculator(calc)
+    # ============= DEFECT CONFIGURATION =============
+    # Choose which atoms define the defect axis
+    # Use DEBUG_MODE to visualize atom indices
+    axis_atoms = (0, 1)  # pyrene C16H10: valid C indices are 0–15; (0,1) is a C-C bond
+    # For Stone-Wales use internal bond (14,15) — both atoms have no H
 
-        # Verify it's properly relaxed
-        forces = atoms.get_forces()
-        max_force = np.max(np.linalg.norm(forces, axis=1))
-        energy = atoms.get_potential_energy()
+    # ============= TRANSFORM SELECTION =============
+    # Enable/disable specific defect types by setting to True/False
+    ENABLE_VACANCY = True          # Single atom removal
+    ENABLE_DIVACANCY = False        # Remove both atoms in pair
+    ENABLE_SPLIT_VACANCY = False    # Move one atom to middle, remove other
+    ENABLE_STONE_WALES = False      # Bond rotation (Stone-Wales defect)
 
-        print(f"Loaded structure info:")
-        print(f"  Energy: {energy:.6f} eV")
-        print(f"  Max force: {max_force:.6f} eV/Å")
-        print(f"  Convergence criterion (fmax): {fmax} eV/Å")
+    # ============= CHEMICAL POTENTIALS =============
+    element_mu = calculate_element_mu(calc)
+    mu_H = calculate_mu_H(calc)
 
-        if max_force > fmax:
-            print(f"\n⚠️  WARNING: Loaded structure not fully converged!")
-            print(f"  Re-relaxing from saved structure...")
-            dyn = BFGS(atoms)
+    # ============= TRANSFORM DEFINITIONS =============
+    # Transforms are built after relaxation inside if not DEBUG_MODE (atoms must be relaxed first)
+    transforms_config = []
+
+    if not DEBUG_MODE:
+        fmax = FMAX
+
+        # Create directory for relaxed structures if it doesn't exist
+        os.makedirs(RELAXED_STRUCTURES_DIR, exist_ok=True)
+
+        relaxed_file = os.path.join(
+            RELAXED_STRUCTURES_DIR,
+            f"relaxed_{molecule_name}_{calc_name}_fmax_{fmax}_cell_{cell}.xyz"
+        )
+
+        # Check if we should use saved relaxed structure
+        if USE_SAVED_RELAXED and os.path.exists(relaxed_file):
+            print(f"\n{'='*60}")
+            print(f"Loading saved relaxed structure from:")
+            print(f"  {relaxed_file}")
+            print(f"{'='*60}\n")
+
+            # Load relaxed structure
+            atoms = read(relaxed_file)
+            atoms.set_calculator(calc)
+
+            # Verify it's properly relaxed
+            forces = atoms.get_forces()
+            max_force = np.max(np.linalg.norm(forces, axis=1))
+            energy = atoms.get_potential_energy()
+
+            print(f"Loaded structure info:")
+            print(f"  Energy: {energy:.6f} eV")
+            print(f"  Max force: {max_force:.6f} eV/Å")
+            print(f"  Convergence criterion (fmax): {fmax} eV/Å")
+
+            if max_force > fmax:
+                print(f"\n⚠️  WARNING: Loaded structure not fully converged!")
+                print(f"  Re-relaxing from saved structure...")
+                dyn = BFGS(atoms, maxstep=BFGS_MAXSTEP)
+                dyn.run(fmax=fmax)
+                atoms.write(relaxed_file)
+                print(f"  ✓ Re-relaxed and updated: {relaxed_file}")
+            else:
+                print(f"  ✓ Structure is properly relaxed")
+        else:
+            # Relax pristine structure from scratch
+            if USE_SAVED_RELAXED:
+                print(f"\n⚠️  Saved relaxed structure not found: {relaxed_file}")
+                print(f"Relaxing pristine structure from scratch...\n")
+            else:
+                print(f"\nRelaxing pristine structure from scratch...")
+
+            atoms.set_calculator(calc)
+            dyn = BFGS(atoms, maxstep=BFGS_MAXSTEP)
             dyn.run(fmax=fmax)
+
+            # Save relaxed structure
             atoms.write(relaxed_file)
-            print(f"  ✓ Re-relaxed and updated: {relaxed_file}")
-        else:
-            print(f"  ✓ Structure is properly relaxed")
-    else:
-        # Relax pristine structure from scratch
-        if USE_SAVED_RELAXED:
-            print(f"\n⚠️  Saved relaxed structure not found: {relaxed_file}")
-            print(f"Relaxing pristine structure from scratch...\n")
-        else:
-            print(f"\nRelaxing pristine structure from scratch...")
+            print(f"\n{'='*60}")
+            print(f"✓ Pristine structure relaxed and saved to:")
+            print(f"  {relaxed_file}")
+            print(f"{'='*60}\n")
 
-        atoms.set_calculator(calc)
-        dyn = BFGS(atoms)
-        dyn.run(fmax=fmax)
+            # Also save to root directory for compatibility
+            atoms.write(f"relaxed_{molecule_name}.xyz")
 
-        # Save relaxed structure
-        atoms.write(relaxed_file)
+        # Build transforms now — atoms is relaxed at this point
+        if ENABLE_VACANCY:
+            _h_v = find_bonded_H(atoms, axis_atoms[0])
+            _to_remove_v = [axis_atoms[0]] + _h_v
+            if _h_v:
+                print(f"  Vacancy: removing C[{axis_atoms[0]}] + bonded H{_h_v}")
+            else:
+                print(f"  Vacancy: removing C[{axis_atoms[0]}]")
+            transforms_config.append({
+                'name': 'vacancy',
+                'atoms_label': 'remove_' + '_'.join(str(i) for i in _to_remove_v),
+                'transforms': [delete_atoms_transform(_to_remove_v)]
+            })
+
+        if ENABLE_DIVACANCY:
+            _h_vv = find_bonded_H(atoms, [axis_atoms[0], axis_atoms[1]])
+            _to_remove_vv = [axis_atoms[0], axis_atoms[1]] + _h_vv
+            if _h_vv:
+                print(f"  Divacancy: removing C[{axis_atoms[0]},{axis_atoms[1]}] + bonded H{_h_vv}")
+            else:
+                print(f"  Divacancy: removing C[{axis_atoms[0]},{axis_atoms[1]}]")
+            transforms_config.append({
+                'name': 'divacancy',
+                'atoms_label': 'remove_' + '_'.join(str(i) for i in _to_remove_vv),
+                'transforms': [delete_atoms_transform(_to_remove_vv)]
+            })
+
+        if ENABLE_SPLIT_VACANCY:
+            _h_sv = find_bonded_H(atoms, axis_atoms[1])
+            _to_remove_sv = [axis_atoms[1]] + _h_sv
+            if _h_sv:
+                print(f"  Split vacancy: moving C[{axis_atoms[0]}] → midpoint, removing C[{axis_atoms[1]}] + bonded H{_h_sv}")
+            else:
+                print(f"  Split vacancy: moving C[{axis_atoms[0]}] → midpoint, removing C[{axis_atoms[1]}]")
+            transforms_config.append({
+                'name': 'split_vacancy',
+                'atoms_label': f'move_{axis_atoms[0]}_remove_' + '_'.join(str(i) for i in _to_remove_sv),
+                'transforms': [
+                    move_atom_transform(
+                        atom_idx=axis_atoms[0],
+                        axis_atom1_idx=axis_atoms[0],
+                        axis_atom2_idx=axis_atoms[1],
+                        distance=get_distance(atoms, axis_atoms[0], axis_atoms[1]) / 2
+                    ),
+                    delete_atoms_transform(_to_remove_sv)
+                ]
+            })
+
+        if ENABLE_STONE_WALES:
+            print(f"  Stone-Wales: rotating bond C[{axis_atoms[0]}]–C[{axis_atoms[1]}] by 90°")
+            transforms_config.append({
+                'name': 'stone_wales',
+                'atoms_label': f'bond_{axis_atoms[0]}_{axis_atoms[1]}',
+                'transforms': [
+                    rotate_bond_transform(
+                        atom1_idx=axis_atoms[0],
+                        atom2_idx=axis_atoms[1],
+                        angle_degrees=90
+                    )
+                ]
+            })
+
+        # Run each enabled transformation
         print(f"\n{'='*60}")
-        print(f"✓ Pristine structure relaxed and saved to:")
-        print(f"  {relaxed_file}")
+        print(f"Running {len(transforms_config)} defect calculations...")
         print(f"{'='*60}\n")
 
-        # Also save to root directory for compatibility
-        atoms.write(f"relaxed_{molecule_name}.xyz")
+        for config in transforms_config:
+            task_name = config['name']
+            transform_list = config['transforms']
+            atoms_label = config['atoms_label']
 
-    # Build transforms now — atoms is relaxed at this point
-    if ENABLE_VACANCY:
-        _h_v = find_bonded_H(atoms, axis_atoms[0])
-        transforms_config.append({
-            'name': 'vacancy',
-            'transforms': [delete_atoms_transform([axis_atoms[0]] + _h_v)]
-        })
+            print(f"\n{'='*60}")
+            print(f"Processing: {task_name}")
+            print(f"{'='*60}")
 
-    if ENABLE_DIVACANCY:
-        _h_vv = find_bonded_H(atoms, [axis_atoms[0], axis_atoms[1]])
-        transforms_config.append({
-            'name': 'divacancy',
-            'transforms': [delete_atoms_transform([axis_atoms[0], axis_atoms[1]] + _h_vv)]
-        })
+            # Create full task name with metadata
+            full_task_name = (
+                f"{task_name}_"
+                f"{atoms_label}_"
+                f"fmax_{fmax}_"
+                f"cell_{cell}_"
+                f"{calc_name}_"
+                f"{os.path.splitext(os.path.basename(mol_filename))[0]}"
+            )
 
-    if ENABLE_SPLIT_VACANCY:
-        transforms_config.append({
-            'name': 'split_vacancy',
-            'transforms': [
-                move_atom_transform(
-                    atom_idx=axis_atoms[0],
-                    axis_atom1_idx=axis_atoms[0],
-                    axis_atom2_idx=axis_atoms[1],
-                    distance=get_distance(atoms, axis_atoms[0], axis_atoms[1]) / 2
-                ),
-                delete_atoms_transform([axis_atoms[1]])
-            ]
-        })
+            # Track and optimize defect structure
+            modified = track_core_structure(
+                fmax=fmax,
+                atoms=atoms.copy(),
+                transforms=transform_list,
+                calc=calc,
+                element_mu=element_mu,
+                mu_H=mu_H,
+                task_name=full_task_name,
+            )
 
-    if ENABLE_STONE_WALES:
-        transforms_config.append({
-            'name': 'stone_wales',
-            'transforms': [
-                rotate_bond_transform(
-                    atom1_idx=axis_atoms[0],
-                    atom2_idx=axis_atoms[1],
-                    angle_degrees=90
-                )
-            ]
-        })
-
-    # Run each enabled transformation
-    print(f"\n{'='*60}")
-    print(f"Running {len(transforms_config)} defect calculations...")
-    print(f"{'='*60}\n")
-
-    for config in transforms_config:
-        task_name = config['name']
-        transform_list = config['transforms']
+            print(f"✓ Completed: {task_name}")
 
         print(f"\n{'='*60}")
-        print(f"Processing: {task_name}")
+        print(f"All calculations completed!")
+        print(f"Results saved in experiments/ directory")
         print(f"{'='*60}")
 
-        # Create full task name with metadata
-        full_task_name = (
-            f"{task_name}_"
-            f"fmax_{fmax}_"
-            f"{os.path.splitext(os.path.basename(mol_filename))[0]}"
-        )
-
-        # Track and optimize defect structure
-        modified = track_core_structure(
-            fmax=fmax,
-            atoms=atoms.copy(),
-            transforms=transform_list,
-            calc=calc,
-            task_name=full_task_name
-        )
-
-        print(f"✓ Completed: {task_name}")
-
-    print(f"\n{'='*60}")
-    print(f"All calculations completed!")
-    print(f"Results saved in experiments/ directory")
-    print(f"{'='*60}")
-
-else:
-    print("\n" + "="*60)
-    print("DEBUG MODE - Showing atom indices")
-    print("="*60)
-    print(f"Molecule: {molecule_name}")
-    print(f"Selected axis atoms: {axis_atoms}")
-    print(f"Total atoms: {len(atoms)}")
-    print(f"\nRelaxation settings:")
-    print(f"  USE_SAVED_RELAXED: {USE_SAVED_RELAXED}")
-    print(f"  Relaxed structures directory: {RELAXED_STRUCTURES_DIR}")
-    print("\nEnabled transforms:")
-    for config in transforms_config:
-        print(f"  - {config['name']}")
-    print("\nSet DEBUG_MODE = False to run calculations")
-    print("="*60)
+    else:
+        print("\n" + "="*60)
+        print("DEBUG MODE - Showing atom indices")
+        print("="*60)
+        print(f"Molecule: {molecule_name}")
+        print(f"Selected axis atoms: {axis_atoms}")
+        print(f"Total atoms: {len(atoms)}")
+        print(f"\nRelaxation settings:")
+        print(f"  USE_SAVED_RELAXED: {USE_SAVED_RELAXED}")
+        print(f"  Relaxed structures directory: {RELAXED_STRUCTURES_DIR}")
+        print("\nEnabled transforms:")
+        for config in transforms_config:
+            print(f"  - {config['name']}")
+        print("\nSet DEBUG_MODE = False to run calculations")
+        print("="*60)

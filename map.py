@@ -1,5 +1,4 @@
 import os
-import platform
 import shutil
 from itertools import combinations
 
@@ -16,10 +15,12 @@ from ase.visualize.plot import plot_atoms
 from matplotlib.colors import LinearSegmentedColormap
 from scipy import stats
 
+from GQD_basic_defects import setup_calculator, FMAX, BFGS_MAXSTEP
 from config import molecules_data
 from utils import (delete_atom_by_idx, rotate_bond_transform, calculate_formation_energy,
-                   calculate_element_mu, determine_target_element,
-                   find_bonded_H, calculate_mu_H)
+                   calculate_element_mu, find_bonded_H, calculate_mu_H)
+
+_C_H_CUTOFF = 1.2  # C-H bond cutoff (Å) for find_bonded_H; C-H bond length ≈ 1.09 Å
 
 # Set global font properties for all plots
 mpl.rcParams['font.family'] = 'Times New Roman'
@@ -159,8 +160,8 @@ def setup_structure(molecule_name):
 
     # Perform initial relaxation
     print("Relaxing base structure...")
-    optimizer = BFGS(atoms)
-    optimizer.run(fmax=0.1)
+    optimizer = BFGS(atoms, maxstep=BFGS_MAXSTEP)
+    optimizer.run(fmax=FMAX)
 
     # Get base energy
     base_relaxed = atoms.copy()
@@ -171,10 +172,11 @@ def setup_structure(molecule_name):
     return base_relaxed, base_energy
 
 
-def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=0.0, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8):
+def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=0.0, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8, calc_name=''):
     """Analyze single vacancy formation energies"""
     print("\n=== Running Vacancy Analysis ===\n")
-    results_dir = f"vacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
+    _suffix = f"_{calc_name}" if calc_name else ""
+    results_dir = f"vacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}_fmax_{FMAX}{_suffix}"
     os.makedirs(results_dir, exist_ok=True)
 
     # Create subdirectories for structures and images
@@ -203,8 +205,8 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
         atom_indices.append(atom_idx)
 
         try:
-            # Find H atoms bonded to this C atom (will be removed together with C)
-            bonded_h = find_bonded_H(base_relaxed, atom_idx)
+            # Find H atoms bonded to this atom (will be removed together with it)
+            bonded_h = find_bonded_H(base_relaxed, atom_idx, cutoff=_C_H_CUTOFF)
             all_to_remove = [atom_idx] + bonded_h
             if bonded_h:
                 print(f"  Removing C[{atom_idx}] + bonded H{bonded_h}")
@@ -217,8 +219,8 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
 
             # Relax the vacancy structure
             print(f"  Relaxing vacancy structure...")
-            optimizer = BFGS(vacancy_atoms)
-            optimizer.run(fmax=0.05)
+            optimizer = BFGS(vacancy_atoms, maxstep=BFGS_MAXSTEP)
+            optimizer.run(fmax=FMAX)
 
             # Calculate formation energy (include mu_H if H was removed)
             _mu_H = mu_H if bonded_h else 0.0
@@ -263,10 +265,11 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
     return atom_indices, formation_energies
 
 
-def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=0.0, max_distance=1.5, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8):
+def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=0.0, max_distance=1.7, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8, calc_name=''):
     """Analyze divacancy formation energies"""
     print("\n=== Running Divacancy Analysis ===\n")
-    results_dir = f"divacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
+    _suffix = f"_{calc_name}" if calc_name else ""
+    results_dir = f"divacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}_fmax_{FMAX}{_suffix}"
     os.makedirs(results_dir, exist_ok=True)
 
     # Create subdirectories for structures and images
@@ -303,13 +306,13 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
         divacancy_pairs.append((atom_idx1, atom_idx2))
 
         try:
-            # Find H atoms bonded to both removed C atoms
-            bonded_h = find_bonded_H(base_relaxed, [atom_idx1, atom_idx2])
+            # Find H atoms bonded to both removed atoms and remove them too
+            bonded_h = find_bonded_H(base_relaxed, [atom_idx1, atom_idx2], cutoff=_C_H_CUTOFF)
             all_to_remove = [atom_idx1, atom_idx2] + bonded_h
             if bonded_h:
                 print(f"  Removing C[{atom_idx1},{atom_idx2}] + bonded H{bonded_h}")
 
-            # Create a divacancy by removing C atoms and their bonded H
+            # Create a divacancy by removing C atoms (and optionally their bonded H)
             divacancy_atoms = delete_atom_by_idx(base_relaxed.copy(), all_to_remove)
 
             # Set up calculator for divacancy structure
@@ -317,8 +320,8 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
 
             # Relax the divacancy structure
             print(f"  Relaxing divacancy structure...")
-            optimizer = BFGS(divacancy_atoms)
-            optimizer.run(fmax=0.05)
+            optimizer = BFGS(divacancy_atoms, maxstep=BFGS_MAXSTEP)
+            optimizer.run(fmax=FMAX)
 
             # Calculate formation energy (consistent formula with vacancy)
             _mu_H = mu_H if bonded_h else 0.0
@@ -366,10 +369,11 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
     return divacancy_pairs, formation_energies
 
 
-def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name, max_distance=1.8, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8):
+def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name, mu_H=0.0, max_distance=1.8, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8, calc_name=''):
     """Analyze Stone-Wales transformation formation energies"""
     print("\n=== Running Stone-Wales Analysis ===\n")
-    results_dir = f"stw_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}"
+    _suffix = f"_{calc_name}" if calc_name else ""
+    results_dir = f"stw_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}_fmax_{FMAX}{_suffix}"
     os.makedirs(results_dir, exist_ok=True)
 
     # Create subdirectories for structures and images
@@ -418,14 +422,11 @@ def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name
 
             # Relax the STW structure
             print(f"  Relaxing Stone-Wales structure...")
-            optimizer = BFGS(stw_atoms)
-            optimizer.run(fmax=0.05)
+            optimizer = BFGS(stw_atoms, maxstep=BFGS_MAXSTEP)
+            optimizer.run(fmax=FMAX)
 
-            # Get STW energy
-            stw_energy = stw_atoms.get_potential_energy()
-
-            # Calculate formation energy (difference from base)
-            formation_energy = stw_energy - base_energy
+            # Calculate formation energy (consistent with vacancy/divacancy)
+            formation_energy = calculate_formation_energy(base_relaxed, stw_atoms, calc, element_mu, mu_H=mu_H)
 
             formation_energies.append(formation_energy)
             print(f"  Stone-Wales {atom_idx1}-{atom_idx2} formation energy: {formation_energy:.3f} eV")
@@ -1054,7 +1055,7 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
 
 if __name__ == "__main__":
     # Configuration - modify these values directly
-    molecule_name = "input_pyrene_C16H10"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
+    molecule_name = "QD_6"  # Choose which molecule to analyze (e.g., QD_4, QD_7)
     defect_type = "all"     # Choose 'vacancy', 'divacancy', 'stw', or 'all'
     show_atom_idx = True    # Set to False to hide atom indices in visualizations
     atom_idx_fontsize = 8   # Font size for atom index labels (increase for larger text)
@@ -1071,55 +1072,14 @@ if __name__ == "__main__":
         print("After inspection, you can specify atom indices to exclude from analysis.")
 
     else:
-        target_element, _ = determine_target_element(read(molecules_data[molecule_name]["path"]))
-        max_distances = {
-            'C': {'div': 1.7, 'stw': 1.8},
-            'Si': {'div': 2.3, 'stw': 2.6},
-            'Ge': {'div': 2.5, 'stw': 2.8}
-        }
+        target_element = 'C'
+        div_dist = 1.7   # C-C divacancy bond cutoff (Å)
+        stw_dist = 1.8   # C-C Stone-Wales bond cutoff (Å)
 
-        # Set distances based on target element
-        div_dist = max_distances[target_element]['div']
-        stw_dist = max_distances[target_element]['stw']
+        calc, calc_name = setup_calculator()
 
-        # Setup calculator based on operating system
-        system_platform = platform.system()
-
-        if system_platform == 'Linux':
-            # Use GPAW on Linux
-            from gpaw import GPAW, PW, FermiDirac
-
-            calc = GPAW(
-                xc='PBE',
-                mode=PW(300),  # Reduced from 400 - still reasonable for C-C bond breaking
-                kpts=(1, 1, 1),
-                symmetry='off',
-                spinpol=True,  # Keep this - essential for radicals
-                occupations=FermiDirac(0.05),  # Increased smearing - faster SCF convergence
-                convergence={
-                    'energy': 0.001,  # Relaxed from 0.0005 (1 meV is fine for formation energies)
-                    'density': 1e-4,  # Much looser - 1e-6 is overkill
-                    'eigenstates': 1e-6,  # Looser from 1e-8
-                },
-                mixer={'backend': 'pulay', 'beta': 0.1, 'nmaxold': 5, 'weight': 50},  # Faster mixing
-                maxiter=300,  # Explicit limit to catch non-convergence earlier
-                txt='calculation.txt',
-            )
-            print("Using GPAW calculator on Linux")
-
-        elif system_platform == 'Windows':
-            # Use SevenNet on Windows
-            from sevenn.calculator import SevenNetCalculator
-
-            # "mpa" refers to the MPtrj + sAlex modal, used for evaluating Matbench Discovery.
-            calc = SevenNetCalculator('7net-omni-i12', modal='mpa')
-            print("Using SevenNet calculator on Windows")
-
-        else:
-            raise RuntimeError(f"Unsupported platform: {system_platform}. Only Linux (GPAW) and Windows (SevenNet) are supported.")
-
-        element_mu = calculate_element_mu(calc, target_element)
-        print(f"Chemical potential for {target_element}: {element_mu:.3f} eV")
+        element_mu = calculate_element_mu(calc)
+        print(f"Chemical potential mu_C: {element_mu:.3f} eV")
         # Setup initial structure
         base_relaxed, base_energy = setup_structure(molecule_name)
 
@@ -1129,15 +1089,17 @@ if __name__ == "__main__":
 
         # Run selected analysis
         if defect_type == 'vacancy' or defect_type == 'all':
-            analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=mu_H, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize)
+            analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=mu_H, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize, calc_name=calc_name)
 
         if defect_type == 'divacancy' or defect_type == 'all':
             analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=mu_H,
-                               max_distance=div_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize)
+                               max_distance=div_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms,
+                               atom_idx_fontsize=atom_idx_fontsize, calc_name=calc_name)
 
         if defect_type == 'stw' or defect_type == 'all':
             analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name,
-                               max_distance=stw_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize)
+                               mu_H=mu_H, max_distance=stw_dist, show_atom_idx=show_atom_idx,
+                               excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize, calc_name=calc_name)
 
         print("\nAnalysis complete!")
 

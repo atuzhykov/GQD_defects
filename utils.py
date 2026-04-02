@@ -8,12 +8,21 @@ from ase.io import read
 from ase.optimize import FIRE
 
 
-def calculate_mu_H(calculator=None):
+def calculate_mu_H(calculator):
     """
-    Chemical potential of hydrogen: ½ × E(H₂), PBE reference.
-    Hardcoded to PBE/PW value.
+    Chemical potential of hydrogen: ½ × E(H₂).
+    Computed dynamically using the provided calculator for energy scale consistency.
     """
-    return -3.382  # eV, ½ × E(H₂) at PBE level
+    from ase.build import molecule
+
+    h2 = molecule('H2')
+    h2.set_cell([15, 15, 15])
+    h2.center()
+    h2.set_pbc(True)
+    h2.set_calculator(calculator)
+    optimizer = FIRE(h2)
+    optimizer.run(fmax=0.05)
+    return h2.get_potential_energy() / 2
 
 
 def find_bonded_H(atoms, c_indices, cutoff=1.2):
@@ -45,116 +54,36 @@ def find_bonded_H(atoms, c_indices, cutoff=1.2):
 
 def calculate_mu_C(calculator):
     """
-    Calculate the chemical potential of carbon from perfect graphene.
+    Chemical potential of carbon: energy per atom in perfect graphene.
+    Computed dynamically using the provided calculator for energy scale consistency.
 
-    Uses ASE's graphene builder to create a periodic graphene unit cell, relaxes it, and computes
-    the energy per carbon atom. This is used as mu_C in formation energy calculations to ensure
-    consistency with the carbon lattice, excluding edge effects from GQDs.
+    Uses a 3×3 graphene supercell (18 atoms) so that the K-point of the primitive
+    cell folds back to Γ. This ensures correct sampling of the Dirac cone with
+    kpts=(1,1,1) in GPAW, while remaining valid for ML potentials (SevenNet).
+    Lattice: a=2.46 Å, 20 Å vacuum in z.
     """
-    from ase.build import graphene
-    from ase.optimize import FIRE
-    import numpy as np
+    from ase import Atoms
+    from ase.build import make_supercell
 
-    # # Create graphene sheet
-    # atoms = graphene()
-    #
-    # # Explicitly set a 3D cell with vacuum in z-direction
-    # vacuum = 15.0  # Adjust as needed (in Ångstroms)
-    # cell = np.array([
-    #     [atoms.cell[0, 0], atoms.cell[0, 1], 0.0],
-    #     [atoms.cell[1, 0], atoms.cell[1, 1], 0.0],
-    #     [0.0, 0.0, vacuum]
-    # ])
-    # atoms.set_cell(cell)
-    # atoms.center()  # Center atoms in the new cell
-    # atoms.pbc = [True, True, True]  # Ensure 3D PBC
-    #
-    # # Assign the calculator
-    # atoms.set_calculator(calculator)
-    #
-    # # Relax the structure
-    # optimizer = FIRE(atoms)
-    # optimizer.run(fmax=0.05)
-    #
-    # # Calculate energy per carbon atom
-    # E_graphene = atoms.get_potential_energy()
-    # N = len(atoms)  # Typically 2 for graphene unit cell
-    # return E_graphene / N
-    return -9.214
-
-def calculate_mu_Si(calculator):
-    """
-    Calculate the chemical potential of silicon from perfect diamond cubic silicon.
-
-    Uses ASE's bulk builder to create a periodic silicon unit cell, relaxes it, and computes
-    the energy per silicon atom. This is used as mu_Si in formation energy calculations to ensure
-    consistency with the silicon lattice.
-    """
-    from ase.build import bulk
-    from ase.optimize import FIRE
-
-    # Create silicon crystal (diamond cubic structure)
-    atoms = bulk('Si', 'diamond', a=5.43)  # 5.43 Å is the lattice constant for Si
-
-    # Assign the calculator
-    atoms.set_calculator(calculator)
-
-    # Relax the structure
-    optimizer = FIRE(atoms)
+    a = 2.46
+    c = 20.0
+    # Primitive 2-atom cell (a2 at 60°, B at [1/3,1/3])
+    primitive = Atoms(
+        symbols='C2',
+        scaled_positions=[[0, 0, 0.5], [1/3, 1/3, 0.5]],
+        cell=[[a, 0, 0], [a / 2, a * np.sqrt(3) / 2, 0], [0, 0, c]],
+        pbc=True,
+    )
+    # 3×3 supercell: K-point of primitive cell folds to Γ → correct with kpts=(1,1,1)
+    graphene = make_supercell(primitive, np.diag([3, 3, 1]))
+    graphene.set_calculator(calculator)
+    optimizer = FIRE(graphene)
     optimizer.run(fmax=0.05)
+    return graphene.get_potential_energy() / len(graphene)
 
-    # Calculate energy per silicon atom
-    E_silicon = atoms.get_potential_energy()
-    N = len(atoms)  # Number of atoms in the unit cell
-    return E_silicon / N
-
-
-def calculate_mu_Ge(calculator):
-    """
-    Calculate the chemical potential of germanium from perfect diamond cubic germanium.
-
-    Uses ASE's bulk builder to create a periodic germanium unit cell, relaxes it, and computes
-    the energy per germanium atom. This is used as mu_Ge in formation energy calculations to ensure
-    consistency with the germanium lattice.
-    """
-    from ase.build import bulk
-    from ase.optimize import FIRE
-
-    # Create germanium crystal (diamond cubic structure)
-    atoms = bulk('Ge', 'diamond', a=5.658)  # 5.658 Å is the lattice constant for Ge
-
-    # Assign the calculator
-    atoms.set_calculator(calculator)
-
-    # Relax the structure
-    optimizer = FIRE(atoms)
-    optimizer.run(fmax=0.05)
-
-    # Calculate energy per germanium atom
-    E_germanium = atoms.get_potential_energy()
-    N = len(atoms)  # Number of atoms in the unit cell
-    return E_germanium / N
-
-
-def calculate_element_mu(calculator, element='C'):
-    """
-    Calculate the chemical potential of the specified element from its perfect crystal structure.
-
-    Args:
-        calculator: ASE calculator to use for energy calculations
-        element: Chemical symbol of the element ('C', 'Si', or 'Ge')
-
-    Returns:
-        Chemical potential (energy per atom) of the specified element
-    """
-    if element == 'C':
-        return calculate_mu_C(calculator)
-    elif element == 'Si':
-        return calculate_mu_Si(calculator)
-    elif element == 'Ge':
-        return calculate_mu_Ge(calculator)
-    else:
-        raise ValueError(f"Unsupported element: {element}. Must be one of: C, Si, Ge")
+def calculate_element_mu(calculator):
+    """Chemical potential of carbon: energy per atom in perfect graphene."""
+    return calculate_mu_C(calculator)
 
 def delete_atom_by_idx(atoms, idx):
     """
@@ -369,13 +298,13 @@ def calculate_formation_energy(perfect, defective, calculator, mu_C, mu_H=0.0):
     E_defective = defective.get_potential_energy()
 
     # Count removed C and H atoms
-    N_C_perfect   = sum(1 for atom in perfect   if atom.symbol == 'C')
-    N_C_defective = sum(1 for atom in defective if atom.symbol == 'C')
-    N_H_perfect   = sum(1 for atom in perfect   if atom.symbol == 'H')
-    N_H_defective = sum(1 for atom in defective if atom.symbol == 'H')
+    N_el_perfect   = sum(1 for atom in perfect   if atom.symbol == 'C')
+    N_el_defective = sum(1 for atom in defective if atom.symbol == 'C')
+    N_H_perfect    = sum(1 for atom in perfect   if atom.symbol == 'H')
+    N_H_defective  = sum(1 for atom in defective if atom.symbol == 'H')
 
-    n_C_removed = N_C_perfect - N_C_defective
-    n_H_removed = N_H_perfect - N_H_defective
+    n_C_removed = N_el_perfect - N_el_defective
+    n_H_removed = N_H_perfect  - N_H_defective
 
     if n_C_removed == 0:
         # Stone-Wales: no atoms removed
@@ -410,9 +339,7 @@ def rotate_bond_transform(atom1_idx, atom2_idx, angle_degrees=90):
         # Calculate midpoint
         midpoint = (pos1 + pos2) / 2
 
-        # Calculate rotation axis (perpendicular to the bond)
-        bond_vector = pos2 - pos1
-        # Using z-axis as rotation axis for 2D structure
+        # Rotation axis: z-axis (perpendicular to the molecular plane for 2D structures)
         rotation_axis = np.array([0, 0, 1])
 
         # Convert angle to radians
