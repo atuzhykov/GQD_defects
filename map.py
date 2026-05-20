@@ -17,6 +17,7 @@ from scipy import stats
 
 from GQD_basic_defects import setup_calculator, FMAX, BFGS_MAXSTEP
 from config import molecules_data
+from ring_overlay import save_ring_overlay
 from utils import (delete_atom_by_idx, rotate_bond_transform, calculate_formation_energy,
                    calculate_element_mu, find_bonded_H, calculate_mu_H)
 
@@ -183,9 +184,11 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
     structures_xyz_dir = os.path.join(results_dir, "relaxed_structures_xyz")
     structures_mol_dir = os.path.join(results_dir, "relaxed_structures_mol")
     images_dir = os.path.join(results_dir, "structure_images")
+    ring_overlays_dir = os.path.join(results_dir, "ring_overlays")
     os.makedirs(structures_xyz_dir, exist_ok=True)
     os.makedirs(structures_mol_dir, exist_ok=True)
     os.makedirs(images_dir, exist_ok=True)
+    os.makedirs(ring_overlays_dir, exist_ok=True)
 
     # Copy input file to results directory
     input_file = molecules_data[molecule_name]["path"]
@@ -252,6 +255,9 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
             save_structure_image(vacancy_atoms, image_file,
                                title=f"Vacancy at atom {atom_idx}\nE_form = {formation_energy:.3f} eV",
                                show_atom_idx=show_atom_idx)
+            overlay_file = os.path.join(ring_overlays_dir, f"vacancy_atom_{atom_idx}.png")
+            save_ring_overlay(vacancy_atoms, overlay_file, ef=formation_energy,
+                              title=f"Vacancy at atom {atom_idx}")
             print(f"  Saved XYZ: {xyz_file}")
             print(f"  Saved MOL: {mol_file}")
 
@@ -276,9 +282,11 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
     structures_xyz_dir = os.path.join(results_dir, "relaxed_structures_xyz")
     structures_mol_dir = os.path.join(results_dir, "relaxed_structures_mol")
     images_dir = os.path.join(results_dir, "structure_images")
+    ring_overlays_dir = os.path.join(results_dir, "ring_overlays")
     os.makedirs(structures_xyz_dir, exist_ok=True)
     os.makedirs(structures_mol_dir, exist_ok=True)
     os.makedirs(images_dir, exist_ok=True)
+    os.makedirs(ring_overlays_dir, exist_ok=True)
 
     # Copy input file to results directory
     input_file = molecules_data[molecule_name]["path"]
@@ -354,6 +362,9 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
             save_structure_image(divacancy_atoms, image_file,
                                title=f"Divacancy at atoms {atom_idx1}-{atom_idx2}\nE_form = {formation_energy:.3f} eV",
                                show_atom_idx=show_atom_idx)
+            overlay_file = os.path.join(ring_overlays_dir, f"divacancy_atoms_{atom_idx1}_{atom_idx2}.png")
+            save_ring_overlay(divacancy_atoms, overlay_file, ef=formation_energy,
+                              title=f"Divacancy at atoms {atom_idx1}-{atom_idx2}")
             print(f"  Saved XYZ: {xyz_file}")
             print(f"  Saved MOL: {mol_file}")
             print(f"  Saved image to {image_file}")
@@ -380,9 +391,11 @@ def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name
     structures_xyz_dir = os.path.join(results_dir, "relaxed_structures_xyz")
     structures_mol_dir = os.path.join(results_dir, "relaxed_structures_mol")
     images_dir = os.path.join(results_dir, "structure_images")
+    ring_overlays_dir = os.path.join(results_dir, "ring_overlays")
     os.makedirs(structures_xyz_dir, exist_ok=True)
     os.makedirs(structures_mol_dir, exist_ok=True)
     os.makedirs(images_dir, exist_ok=True)
+    os.makedirs(ring_overlays_dir, exist_ok=True)
 
     # Copy input file to results directory
     input_file = molecules_data[molecule_name]["path"]
@@ -443,6 +456,9 @@ def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name
             save_structure_image(stw_atoms, image_file,
                                title=f"Stone-Wales defect at bond {atom_idx1}-{atom_idx2}\nE_form = {formation_energy:.3f} eV",
                                show_atom_idx=show_atom_idx)
+            overlay_file = os.path.join(ring_overlays_dir, f"stw_bond_{atom_idx1}_{atom_idx2}.png")
+            save_ring_overlay(stw_atoms, overlay_file, ef=formation_energy,
+                              title=f"Stone-Wales defect at bond {atom_idx1}-{atom_idx2}")
             print(f"  Saved XYZ: {xyz_file}")
             print(f"  Saved MOL: {mol_file}")
             print(f"  Saved image to {image_file}")
