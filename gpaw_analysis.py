@@ -21,6 +21,7 @@ import numpy as np
 from ase.io import read, write
 from ase.optimize import BFGS
 
+import settings  # noqa: F401  (side effect: applies the project matplotlib style)
 from config import molecules_data
 
 # GPAW imports
@@ -139,7 +140,7 @@ class GPAWAnalyzer:
             print("Relaxing structure...")
             optimizer = BFGS(self.atoms,
                            trajectory=os.path.join(self.output_dir, 'relaxation.traj'))
-            optimizer.run(fmax=0.05)
+            optimizer.run(fmax=settings.FMAX)
 
             # Save relaxed structure
             write(os.path.join(self.output_dir, f'relaxed_{self.molecule_name}.xyz'),
@@ -757,33 +758,81 @@ class GPAWAnalyzer:
                 f.write(f"  - vibrational_spectrum.png: IR spectrum\n")
 
 
-if __name__ == "__main__":
-    # Example usage
-    molecule_name = "Coronene"  # Change this to analyze different molecules
+def analyze_molecules(molecule_names, xc='PBE', mode_cutoff=500, kpts=(1, 1, 1),
+                      spinpol=True, include_optical=True, include_phonons=False):
+    """
+    Run a full GPAW analysis on several configurations in one call.
 
-    # Create analyzer
-    analyzer = GPAWAnalyzer(
-        molecule_name=molecule_name,
+    Each molecule gets its own GPAWAnalyzer and its own gpaw_results_<name>/
+    output directory, so a batch run never overwrites another configuration's
+    results. Mirrors the multi-configuration pattern of the formation-energy
+    scripts (GQD_functionalization / GQD_dopants_mols_energy_comparison.py).
+
+    Parameters:
+        molecule_names (list[str]): Molecule keys from config.py to analyze.
+        xc, mode_cutoff, kpts, spinpol: GPAW settings applied to every molecule.
+        include_optical, include_phonons: forwarded to run_full_analysis().
+
+    Returns:
+        dict: {molecule_name: results_dict}.  A molecule whose run raised is
+              mapped to None and reported in the closing summary, so one failure
+              does not abort the rest of the batch.
+    """
+    all_results = {}
+    n = len(molecule_names)
+
+    for i, molecule_name in enumerate(molecule_names, start=1):
+        print(f"\n{'#' * 60}")
+        print(f"# CONFIGURATION {i}/{n}: {molecule_name}")
+        print(f"{'#' * 60}")
+
+        try:
+            analyzer = GPAWAnalyzer(
+                molecule_name=molecule_name,
+                xc=xc,
+                mode_cutoff=mode_cutoff,
+                kpts=kpts,
+                spinpol=spinpol,
+            )
+            results = analyzer.run_full_analysis(
+                include_optical=include_optical,
+                include_phonons=include_phonons,
+            )
+            all_results[molecule_name] = results
+        except Exception as e:
+            print(f"\nERROR: analysis failed for {molecule_name}: {e}")
+            all_results[molecule_name] = None
+
+    # ---- batch summary ----
+    print(f"\n{'=' * 60}")
+    print("BATCH SUMMARY")
+    print(f"{'=' * 60}")
+    for molecule_name, results in all_results.items():
+        if results is None:
+            print(f"  {molecule_name:24s}  FAILED")
+        elif 'homo_lumo' in results:
+            print(f"  {molecule_name:24s}  band gap = {results['homo_lumo']['gap']:.3f} eV")
+        else:
+            print(f"  {molecule_name:24s}  done (no gap recorded)")
+
+    return all_results
+
+
+if __name__ == "__main__":
+    # ============================================================
+    # CONFIGURATION
+    # List one or more molecule keys from config.py to analyze in one run.
+    # Each is written to its own gpaw_results_<name>/ directory.
+    # ============================================================
+    molecule_names = ["Coronene"]
+
+    # Note: Set include_optical=False and include_phonons=False for faster testing
+    all_results = analyze_molecules(
+        molecule_names,
         xc='PBE',
         mode_cutoff=500,
         kpts=(1, 1, 1),
-        spinpol=True
-    )
-
-    # Run full analysis
-    # Note: Set include_optical=False and include_phonons=False for faster testing
-    results = analyzer.run_full_analysis(
+        spinpol=True,
         include_optical=True,   # Set to False to skip optical calculations
-        include_phonons=False    # Set to False to skip phonon calculations
+        include_phonons=False,  # Set to False to skip phonon calculations
     )
-
-    # Access individual results
-    print("\nKey Results:")
-    print(f"Band gap: {results['homo_lumo']['gap']:.3f} eV")
-
-    if 'phonons' in results:
-        print(f"Number of vibrational modes: {len(results['phonons']['frequencies_cm'])}")
-
-    if 'optical' in results:
-        max_idx = np.argmax(results['optical']['absorption'])
-        print(f"Peak absorption at: {results['optical']['energies'][max_idx]:.2f} eV")

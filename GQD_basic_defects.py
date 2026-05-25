@@ -7,13 +7,14 @@ from ase.io import read, Trajectory
 from ase.optimize import BFGS
 from ase.visualize import view
 
+import cache
 from config import molecules_data
 from utils import (
     rotate_bond_transform,
     delete_atoms_transform,
     move_atom_transform,
     get_distance, calculate_formation_energy, write_traj_xyz, save_structure,
-    find_bonded_H, calculate_mu_H, calculate_element_mu
+    find_bonded_H
 )
 
 # ============= DEBUG MODE =============
@@ -21,12 +22,9 @@ from utils import (
 DEBUG_MODE = False
 
 # ============= RELAXATION SETTINGS =============
-# Set True to use previously saved relaxed structure (skip relaxation)
-# Set False to always relax from scratch
-USE_SAVED_RELAXED = True
-RELAXED_STRUCTURES_DIR = "relaxed_structures"  # Directory for saved structures
-FMAX = 0.05
-BFGS_MAXSTEP = 0.1  # Max BFGS step size (Å). Default ASE=0.2; use 0.1 for GPAW defects to prevent SCF divergence.
+# Single source of truth lives in settings.py; re-exported here so existing
+# `from GQD_basic_defects import FMAX, BFGS_MAXSTEP` imports keep working.
+from settings import FMAX, BFGS_MAXSTEP, USE_SAVED_RELAXED, RELAXED_STRUCTURES_DIR
 
 
 # ============= CALCULATOR SETUP =============
@@ -75,6 +73,30 @@ def setup_calculator():
 def track_core_structure(fmax, atoms, transforms, calc, element_mu, mu_H,
                          central_atom_index=0, radius=8,
                          task_name="core_tracking", fix_ends=False, fixed_atoms=[]):
+    """Apply defect transforms, relax, and track the core region during relaxation.
+
+    Applies the given transform(s) to a copy of the pristine structure, relaxes
+    the result with BFGS, and writes per-step trajectories for both the full
+    system and the core atoms (those within `radius` of `central_atom_index`).
+    The defect formation energy is computed at the end and saved alongside the
+    relaxed structure.
+
+    Parameters:
+    fmax: float — force-convergence criterion [eV/Å]
+    atoms: ASE Atoms — pristine (already relaxed) structure to transform
+    transforms: list[callable] — transform(atoms) functions applied in order
+    calc: ASE calculator — attached to the modified structure for relaxation
+    element_mu: float — chemical potential of the host element (μ_C) [eV]
+    mu_H: float — chemical potential of hydrogen (½·E(H₂)) [eV]
+    central_atom_index: int — atom defining the core-region center (default 0)
+    radius: float — core-region radius [Å] (default 8)
+    task_name: str — label used for the experiments/ output subdirectory
+    fix_ends: bool — if True, fix atoms farther than `radius` from the center
+    fixed_atoms: list[int] — additional atom indices to constrain
+
+    Returns:
+    ASE Atoms — the relaxed modified (defective) structure
+    """
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     experiment_dir = os.path.join(f"experiments", f"{task_name}_{timestamp}")
     os.makedirs(experiment_dir, exist_ok=True)
@@ -191,8 +213,9 @@ if __name__ == "__main__":
     ENABLE_STONE_WALES = False      # Bond rotation (Stone-Wales defect)
 
     # ============= CHEMICAL POTENTIALS =============
-    element_mu = calculate_element_mu(calc)
-    mu_H = calculate_mu_H(calc)
+    # Cached per calculator: graphene μ_C and ½·E(H₂) μ_H computed at most once.
+    element_mu = cache.get_chemical_potential('C', calc, calc_name, fmax=FMAX)
+    mu_H = cache.get_chemical_potential('H', calc, calc_name, fmax=FMAX)
 
     # ============= TRANSFORM DEFINITIONS =============
     # Transforms are built after relaxation inside if not DEBUG_MODE (atoms must be relaxed first)

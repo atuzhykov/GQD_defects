@@ -1,314 +1,259 @@
 # Graphene Quantum Dot Defect Analysis
 
-A computational chemistry toolkit for analyzing structural defects, doping, and functionalization in graphene quantum dots (GQDs) and 2D carbon-based materials using DFT and machine learning potentials.
+A computational-chemistry toolkit for studying structural defects, substitutional
+doping, and edge functionalization in graphene quantum dots (GQDs) and small 2D
+carbon nanostructures. Energies are evaluated either with **GPAW** (DFT, PBE) on
+Linux or with the **SevenNet** machine-learning interatomic potential on Windows;
+the calculator is chosen automatically from the operating system.
 
-## Overview
+## What it does
 
-This project performs comprehensive atomic-scale analysis of defects in graphene quantum dots, including:
-- **Vacancy analysis**: Single and double atom removal
-- **Stone-Wales defects**: Bond rotation transformations
-- **Doping studies**: Substitutional doping with B, N, P, etc.
-- **Functionalization**: Edge and surface functionalization with chemical groups (NH2, COOH, OH, etc.)
-- **Electronic properties**: HOMO/LUMO, band gap, optical absorption, electron density
-- **Formation energy mapping**: Systematic analysis of all possible defect sites
+- **Vacancy / divacancy / Stone-Wales mapping** — systematically scan every site of
+  a GQD and produce a formation-energy map (`map.py`).
+- **Single-defect application** — apply a chosen vacancy, divacancy, split-vacancy,
+  or Stone-Wales defect to one bond and track the core during relaxation
+  (`GQD_basic_defects.py`).
+- **Pairwise formation-energy comparisons** — compare a pristine structure against
+  one or more pre-built defect / doped / functionalized structures
+  (`GQD_defects_…`, `GQD_dopants_…`, `GQD_functionalization_mols_energy_comparison.py`).
+- **DFT electronic structure** (GPAW only) — HOMO/LUMO and gap, electron density,
+  a single-particle absorption spectrum, dipole moment, and vibrational modes
+  (`gpaw_analysis.py`).
 
-## Key Features
-
-- **Dual calculator support**: GPAW (DFT, Linux) and SevenNet (ML potential, Windows)
-- **Automated defect mapping**: Systematic exploration of all possible defect configurations
-- **Comprehensive visualization**: Energy maps, distribution plots, structure images
-- **Formation energy calculations**: Quantitative comparison of defect stability
-- **DFT electronic structure analysis**: HOMO/LUMO, optical spectra, phonons (GPAW only)
-
-## Project Structure
+## Project structure
 
 ```
 .
-├── map.py                              # Main defect mapping tool (systematic analysis)
-├── GQD_basic_defects.py               # Single defect application tool
-├── gpaw_analysis.py                   # GPAW DFT electronic structure analysis
-├── GQD_dopants_mols_energy_comparison.py       # Doping comparison tool
-├── GQD_functionalization_mols_energy_comparison.py  # Functionalization comparison
-├── utils.py                           # Utility functions
-├── config.py                          # Molecule database configuration
-└── data/                              # Input molecular structures (.mol files)
+├── settings.py                                      # central config: plot style, DPI, FMAX, BFGS_MAXSTEP
+├── config.py                                        # molecule database (paths + cell sizes)
+├── utils.py                                         # transforms, formation-energy formula, μ helpers, MOL/XYZ I/O
+├── GQD_basic_defects.py                             # setup_calculator() + single-defect driver
+├── map.py                                           # systematic vacancy/divacancy/Stone-Wales mapping
+├── ring_overlay.py                                  # non-hexagonal ring overlay figures (used by map.py + defect comparison)
+├── gpaw_analysis.py                                 # GPAWAnalyzer class + analyze_molecules() batch driver
+├── GQD_defects_mols_energy_comparison.py            # pristine vs pre-made defect
+├── GQD_dopants_mols_energy_comparison.py            # pristine vs doped (legacy) + automated site scan
+├── GQD_functionalization_mols_energy_comparison.py  # pristine vs functionalized
+└── data/                                            # input structures (.mol with bonds, .xyz)
 ```
+
+`setup_calculator()` lives in `GQD_basic_defects.py` and is the single calculator
+factory imported by the other scripts.
 
 ## Installation
 
-### Prerequisites
+Create an environment and install ASE plus one calculator backend.
 
-Choose your platform and calculator:
-
-#### Linux with GPAW (DFT)
-Recommended for accurate electronic structure calculations.
-
-#### Windows with SevenNet (ML potential)
-Faster calculations, suitable for large-scale screening.
-
-### Environment Setup
-
-1. **Install Miniconda/Anaconda**
-   - Download from: https://docs.anaconda.com/miniconda/
-
-2. **Create conda environment**
-   ```bash
-   conda create --name gqd_defects python=3.10 numpy=1.23.5
-   conda activate gqd_defects
-   ```
-
-3. **Install ASE (Atomic Simulation Environment)**
-   ```bash
-   pip install ase
-   ```
-
-4. **Install calculator (choose one)**
-
-   **Option A: GPAW (Linux only)**
-   ```bash
-   # Check CUDA version if using GPU
-   nvidia-smi
-
-   # Install PyTorch with appropriate CUDA version
-   # For CUDA 11.8:
-   conda install pytorch==2.2.1 torchvision==0.17.1 torchaudio==2.2.1 pytorch-cuda=11.8 -c pytorch -c nvidia
-   # For CUDA 12.1:
-   conda install pytorch==2.2.1 torchvision==0.17.1 torchaudio==2.2.1 pytorch-cuda=12.1 -c pytorch -c nvidia
-
-   # Install GPAW
-   pip install gpaw
-
-   # Install GPAW datasets
-   gpaw install-data <directory>
-   ```
-
-   **Option B: SevenNet (Windows)**
-   ```bash
-   # Install PyTorch
-   conda install pytorch==2.2.1 torchvision==0.17.1 torchaudio==2.2.1 cpuonly -c pytorch
-
-   # Install SevenNet
-   pip install sevenn-calculator
-   ```
-
-5. **Install additional dependencies**
-   ```bash
-   pip install matplotlib scipy
-   pip install "pynanoflann@git+https://github.com/dwastberg/pynanoflann#egg=af434039ae14bedcbb838a7808924d6689274168"
-   ```
-
-## Usage
-
-### 1. Systematic Defect Mapping (map.py)
-
-Automatically analyzes all possible defect sites in a molecule.
-
-```python
-# Edit configuration in map.py
-molecule_name = "Coronene"      # Choose molecule from config.py
-defect_type = "vacancy"         # Options: 'vacancy', 'divacancy', 'stw', 'all'
-show_atom_idx = True           # Display atom indices in plots
-DEBUG_MODE = False             # Set True to visualize structure first
-
-# Run analysis
-python map.py
+```bash
+conda create --name gqd_defects python=3.10
+conda activate gqd_defects
+pip install ase matplotlib scipy numpy networkx
 ```
 
-**Output** (in `{defect_type}_map_{molecule_name}/`):
-- `formation_energy_map.png`: Color-coded defect energy map
-- `energy_distribution.png`: Statistical distribution with Gaussian fit
-- `summary.txt`: Detailed statistics and rankings
-- `energy_map.txt`: Formation energies for all sites
-- `relaxed_structures_xyz/`: Relaxed structures in XYZ format
-- `relaxed_structures_mol/`: Relaxed structures in MOL format with bond info
-- `structure_images/`: Visualizations of each defect
-
-### 2. Single Defect Analysis (GQD_basic_defects.py)
-
-Apply specific defects to analyze individual configurations.
-
-```python
-# Configure in GQD_basic_defects.py
-molecule_name = "GQD_HEXAGON_3_3"
-axis_atoms = (32, 16)          # Atom indices defining defect location
-
-# Enable desired defect types
-ENABLE_VACANCY = True          # Single atom removal
-ENABLE_DIVACANCY = True        # Double atom removal
-ENABLE_SPLIT_VACANCY = True    # Move + remove
-ENABLE_STONE_WALES = True      # Bond rotation
-
-# Run
-python GQD_basic_defects.py
+**Linux — GPAW (DFT):**
+```bash
+pip install gpaw
+gpaw install-data <datasets_dir>
 ```
 
-### 3. GPAW Electronic Structure Analysis (gpaw_analysis.py)
-
-Comprehensive DFT analysis of electronic properties (Linux only).
-
-```python
-from gpaw_analysis import GPAWAnalyzer
-
-# Create analyzer
-analyzer = GPAWAnalyzer(
-    molecule_name="Coronene",
-    xc='PBE',
-    mode_cutoff=300,
-    spinpol=True
-)
-
-# Run full analysis
-results = analyzer.run_full_analysis(
-    include_optical=True,
-    include_phonons=False
-)
-
-# Access results
-print(f"Band gap: {results['homo_lumo']['gap']:.3f} eV")
+**Windows — SevenNet (ML potential):**
+```bash
+# CPU PyTorch is sufficient
+pip install sevenn
 ```
-
-**Calculated properties**:
-- Ground state energy
-- HOMO/LUMO eigenvalues and band gap
-- Electronic density (cube format for visualization)
-- Optical absorption spectrum
-- Dipole moment
-- Vibrational frequencies (optional)
+The SevenNet model used is `7net-omni-i12` with `modal='mpa'`. `networkx` is only
+needed for the ring-overlay figures.
 
 ## Configuration
 
-### Adding New Molecules
+### settings.py — single source of truth
 
-Edit `config.py`:
+All relaxation constants and plot styling live here and are imported everywhere
+else (so `from GQD_basic_defects import FMAX, BFGS_MAXSTEP` still resolves to these
+values):
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `FMAX` | `0.05` | force-convergence criterion [eV/Å] |
+| `BFGS_MAXSTEP` | `0.1` | max BFGS step [Å] (smaller than the ASE default to keep GPAW stable on defects) |
+| `USE_SAVED_RELAXED` | `True` | reuse a cached relaxed structure when present |
+| `RELAXED_STRUCTURES_DIR` | `"relaxed_structures"` | cache directory |
+
+Importing `settings` also applies the project matplotlib style (Times New Roman,
+publication DPI). Call `settings.print_settings()` to dump the active configuration.
+
+### Caching of expensive results (`cache.py`)
+
+Relaxations and reference-energy calculations dominate runtime, and many repeat
+across runs, so two kinds of result are cached under `relaxed_structures/`, keyed
+by the active calculator (so GPAW and SevenNet never share an energy scale):
+
+- **Chemical potentials** → `relaxed_structures/chemical_potentials.json`. μ_C
+  (graphene), μ_H (½·E(H₂)) and μ_X (½·E(X₂)) depend only on the calculator and
+  `FMAX`, so the graphene/H₂/diatomic relaxations run at most once per calculator
+  and are reused by every script and every run.
+- **Relaxed structures** → `relaxed_structures/relaxed_<key>_<calc>_fmax_<f>_cell_<cell>.xyz`.
+  The pristine reference and the pre-made config-key structures in the comparison
+  scripts (and the base structure in `map.py` / automated doping) are cached and
+  reused. Per-site relaxations (each vacancy/divacancy/Stone-Wales/doping site)
+  are **not** cached.
+
+Every cache is verified before reuse — a structure is reused only if its max force
+is still below `FMAX` and its composition matches; otherwise it is re-relaxed (from
+the cached geometry when available). So a cache hit can never return a stale or
+under-converged result. Delete `relaxed_structures/` to force everything to
+recompute. The structure-cache filename matches the `USE_SAVED_RELAXED` scheme in
+`GQD_basic_defects.py`, so those caches are shared.
+
+### config.py — molecule database
 
 ```python
 molecules_data = {
     "Your_Molecule": {
         "path": os.path.join("data", "your_molecule.mol"),
-        "cell": 25  # Cell size in Angstroms
-    }
+        "cell": 30,   # cubic cell edge in Å (rule: ≥ max molecular extent + 20 Å)
+    },
 }
 ```
+`.mol` (V2000) inputs keep their bond block, which is preserved through relaxation
+and written back into the output `.mol` files.
 
-Place MOL files in `data/` directory.
+## Usage
 
-### Calculator Selection
+Each script is configured by editing the constants near its `__main__` / `main()`
+block, then run directly.
 
-The code automatically selects the calculator based on the operating system:
-- **Linux**: GPAW (DFT)
-- **Windows**: SevenNet (ML potential)
+### Systematic defect mapping — `map.py`
 
-## Output Files
+```python
+molecule_name = "QD_6"   # key from config.py
+defect_type   = "all"    # 'vacancy', 'divacancy', 'stw', or 'all'
+show_atom_idx = True
+DEBUG_MODE    = False     # True → just open the structure in the ASE viewer
+```
+For vacancy/divacancy, any H bonded to a removed carbon is removed with it and
+accounted for via μ_H. Output goes to
+`vacancy_map_<mol>_cell_size_<n>_fmax_<f>_<calc>/` (and `divacancy_map_…`,
+`stw_map_…`), each containing:
+- `formation_energy_map.png` / `divacancy_energy_map.png` / `stw_energy_map.png`
+- `energy_distribution.png` + `energy_distribution.txt` (histogram + Gaussian fit)
+- `summary.txt`, `energy_map.txt`, `formation_energies.npz`
+- `relaxed_structures_xyz/`, `relaxed_structures_mol/`, `structure_images/`,
+  `ring_overlays/`
 
-### Defect Mapping
-- `formation_energy_map.png`: Spatial visualization of defect energies
-- `energy_distribution.png`: Histogram with Gaussian fit
-- `summary.txt`: Statistical analysis and top/bottom rankings
-- `energy_map.txt`: Raw data (atom indices and energies)
-- `relaxed_structures_xyz/`: Optimized structures for each defect
-- `relaxed_structures_mol/`: Structures with bond information preserved
+### Single-defect application — `GQD_basic_defects.py`
 
-### GPAW Analysis
-- `relaxed_{molecule}.xyz`: Optimized structure
-- `homo_lumo.txt`: Electronic eigenvalues
-- `energy_levels.png`: Energy level diagram
-- `density.cube`: Electron density (for VESTA/VMD visualization)
-- `density_slice.png`: 2D density cross-section
-- `absorption_spectrum.png`: Optical properties
-- `phonon_frequencies.txt`: Vibrational modes
-- `analysis_summary.txt`: Complete results summary
+```python
+molecule_name = "input_pyrene_C16H10"
+axis_atoms    = (0, 1)     # two atom indices defining the defect bond/site
+ENABLE_VACANCY       = True
+ENABLE_DIVACANCY     = False
+ENABLE_SPLIT_VACANCY = False
+ENABLE_STONE_WALES   = False
+```
+The pristine structure is relaxed once (and cached under
+`relaxed_structures/` when `USE_SAVED_RELAXED`), each enabled defect is applied and
+relaxed, and the core region is tracked into `experiments/<task>_<timestamp>/`.
 
-## Supported Defect Types
+### Pairwise comparisons — `GQD_{defects,dopants,functionalization}_mols_energy_comparison.py`
 
-1. **Vacancy**: Single atom removal
-   - Formation energy: E_form = E_defect - E_pristine + μ_element
+Compare a pristine structure to one or more pre-built modified structures (all
+registered in `config.py`). The pristine reference is relaxed **once** and shared
+across every comparison. Example (functionalization):
 
-2. **Divacancy**: Double atom removal (adjacent atoms)
-   - Identifies all atom pairs within bonding distance
+```python
+pristine_key  = "GQD_HEX_2_2"
+modified_keys = ["GQD_HEX_2_2_func_all"]
+```
+Outputs land in `legacy_func_<pristine>_vs_<modified>_<calc>/` (analogously
+`legacy_defect_…`, `legacy_doping_…`) and contain the copied inputs, relaxed
+XYZ/MOL structures, and a `*_energy_analysis.txt` with the full per-element
+breakdown.
 
-3. **Stone-Wales (STW)**: 90° bond rotation
-   - Topological defect without atom removal
+`GQD_dopants_mols_energy_comparison.py` additionally has an **automated** mode
+(`mode = "automated"`): `DopingFormationCalculator.analyze_doping_sites()` scans
+every substitution site of a GQD for one dopant and writes a doping energy map to
+`doping_map_<mol>_<dopant>_<calc>/`.
 
-4. **Doping**: Substitutional replacement with heteroatoms
-   - Supported elements: B, N, P, Si, Ge, etc.
+### GPAW electronic structure — `gpaw_analysis.py` (Linux only)
 
-5. **Functionalization**: Addition of chemical groups
-   - Examples: -NH2, -COOH, -OH, -BH2
+```python
+from gpaw_analysis import analyze_molecules
 
-## Computational Details
+analyze_molecules(["Coronene"], xc='PBE', mode_cutoff=500,
+                  include_optical=True, include_phonons=False)
+```
+or use the class directly:
+```python
+from gpaw_analysis import GPAWAnalyzer
+analyzer = GPAWAnalyzer("Coronene", xc='PBE', mode_cutoff=300, spinpol=True)
+results  = analyzer.run_full_analysis(include_optical=True, include_phonons=False)
+print(f"Band gap: {results['homo_lumo']['gap']:.3f} eV")
+```
+Each molecule writes to its own `gpaw_results_<name>/`: relaxed structure,
+`homo_lumo.txt` + `energy_levels.png`, `density.cube` + `density_slice.png`,
+`simple_spectrum.txt`/`absorption_spectrum.png`, `dipole_moment.txt`, optional
+phonon files, and `analysis_summary.txt`. The absorption spectrum is a fast
+single-particle (Kohn-Sham) approximation, not full TDDFT.
 
-### GPAW Settings (Linux)
-- **XC functional**: PBE (GGA)
-- **Cutoff energy**: 300-400 eV
-- **k-points**: Γ-point (1×1×1) for molecules
-- **Spin polarization**: Enabled (essential for radicals/defects)
-- **Convergence**: 0.05 eV/Å force criterion
+## Formation-energy conventions
 
-### SevenNet Settings (Windows)
-- **Model**: 7net-l3i5 with 'mpa' mode
-- **Training data**: MPtrj + sAlex dataset
-- **Performance**: ~100× faster than DFT, good accuracy for C-based materials
+**Defects (`utils.calculate_formation_energy`, used by `map.py` and the defect
+comparison):**
 
-### Element-Specific Parameters
+```
+n_C_removed == 0 (Stone-Wales):  E_f = E_defect − E_pristine
+n_C_removed ≥ 1  (V / VV):        E_f = E_defect − E_pristine + n_C·μ_C + n_H·μ_H
+```
 
-Bond distance thresholds (for divacancy/STW analysis):
-- **Carbon**: divacancy 1.7 Å, STW 1.8 Å
-- **Silicon**: divacancy 2.3 Å, STW 2.6 Å
-- **Germanium**: divacancy 2.5 Å, STW 2.8 Å
+**Doping / functionalization (per-element composition difference):**
 
-## Tips and Best Practices
+```
+E_f = E_modified − E_pristine − Σ_i Δn_i · μ_i        (Δn_i = n_i(mod) − n_i(pristine))
+```
+An added atom (Δn > 0) is drawn from a reservoir at cost μ and lowers E_f by μ; a
+removed atom raises it. For a substitutional N→C swap this reduces to the familiar
+`E_doped − E_pristine + μ_C − μ_N`.
 
-1. **Use DEBUG_MODE first**: Set `DEBUG_MODE = True` to visualize atom indices before running calculations
+### Chemical potentials
 
-2. **Start with small molecules**: Test workflow with coronene or small GQDs before large systems
+Computed dynamically with the **active calculator** so the energy scale matches:
+- **μ_C** = energy/atom of a relaxed 3×3 graphene supercell (`utils.calculate_mu_C`,
+  the K-point folds to Γ so `kpts=(1,1,1)` samples the Dirac cone correctly).
+- **μ_H** = ½·E(H₂) (`utils.calculate_mu_H`).
+- **μ_N, μ_O, μ_F, μ_Cl** = ½·E(X₂) from the relaxed gas-phase diatomic.
 
-3. **Check convergence**: Verify relaxed structures have max forces < 0.05 eV/Å
+Elements with no diatomic/graphene reference (**B, P, S, Li**) fall back to
+hard-coded literature values; these are on a different energy scale and are flagged
+loudly at runtime — supply a proper bulk reference for publication-grade numbers.
+The automated doping mode uses a separate hard-coded `chemical_potentials` table
+(with uncertainties) instead of the dynamic values.
 
-4. **Reuse relaxed structures**: Set `USE_SAVED_RELAXED = True` in GQD_basic_defects.py to skip pristine structure relaxation
+## Calculator settings
 
-5. **Parallel calculations**: For large-scale screening, use map.py which saves each result independently
+**GPAW (`setup_calculator`, Linux):** PBE, `mode=PW(400)`, `kpts=(1,1,1)`,
+`symmetry='off'`, `spinpol=True`, `FermiDirac(0.05)`, Pulay mixer, `maxiter=500`,
+convergence `energy=1e-5`, `density=1e-5`, `eigenstates=1e-7`. `GPAWAnalyzer` uses
+its own looser convergence and a configurable `mode_cutoff` (300 default, 500 in the
+batch driver).
 
-6. **Visualization**:
-   - Use VESTA or VMD to visualize `.cube` density files
-   - Use ASE GUI for `.xyz` and `.traj` files: `ase gui file.xyz`
+**SevenNet (Windows / other):** `7net-omni-i12`, `modal='mpa'` — much faster than
+DFT, well suited to large-scale carbon screening.
 
-## Troubleshooting
+Spin polarization is essential for open-shell defects (vacancies, radicals).
 
-### GPAW convergence issues
-- Increase `maxiter` in calculator settings
-- Try different mixing parameters
-- Use smaller `mode_cutoff` for initial testing
-- Enable `spinpol=True` for open-shell systems
+## Tips
 
-### Memory issues
-- Reduce `mode_cutoff` (e.g., 300 instead of 400 eV)
-- Use smaller molecules or cell sizes
-- On Windows, SevenNet uses much less memory than GPAW
-
-### Platform-specific issues
-- **Linux**: Ensure GPAW PAW datasets are installed
-- **Windows**: SevenNet requires PyTorch but works on CPU
+- Set `DEBUG_MODE = True` first to inspect atom indices before committing to a run.
+- Leave `USE_SAVED_RELAXED = True` to skip re-relaxing the pristine reference.
+- `.cube` densities open in VESTA/VMD; `.xyz`/`.traj` open with `ase gui file.xyz`.
 
 ## Citation
 
-If you use this code, please cite the relevant papers for the calculators:
+- **GPAW** — J. J. Mortensen et al., *Phys. Rev. B* **71**, 035109 (2005).
+- **SevenNet** — Park et al., arXiv:2409.06676 (2024).
+- **ASE** — A. H. Larsen et al., *J. Phys.: Condens. Matter* **29**, 273002 (2017).
 
-**GPAW**:
-- J. J. Mortensen et al., Phys. Rev. B 71, 035109 (2005)
-
-**SevenNet**:
-- Park et al., arXiv:2409.06676 (2024)
-
-**ASE**:
-- A. H. Larsen et al., J. Phys.: Condens. Matter 29, 273002 (2017)
-
-## License
-
-This project is for academic research purposes.
-
-## Contact
-
-For questions or issues, please refer to the respective calculator documentation:
-- GPAW: https://wiki.fysik.dtu.dk/gpaw/
-- SevenNet: https://github.com/MDIL-SNU/SevenNet
-- ASE: https://wiki.fysik.dtu.dk/ase/
+For academic research use.
+</content>
+</invoke>

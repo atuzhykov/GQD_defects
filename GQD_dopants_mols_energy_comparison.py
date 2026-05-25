@@ -1,34 +1,88 @@
+"""
+GQD_dopants_mols_energy_comparison.py
+Substitutional-doping formation-energy comparison.
+
+Sibling of GQD_defects_mols_energy_comparison.py /
+GQD_functionalization_mols_energy_comparison.py, but for substitutional doping
+(N, B, P, S, O, F, ...): you pass a pristine structure and one or more pre-made
+doped structures (all registered in config.py molecules_data), the script relaxes
+them and reports the doping formation energy.
+
+Two modes are available in main():
+  * "legacy"    — compare a pristine GQD against one OR MORE pre-made doped GQDs.
+                  The pristine reference is relaxed only ONCE and shared across all
+                  comparisons (mirrors the functionalization script).
+  * "automated" — scan every substitution site of a single GQD for one dopant and
+                  build an energy map (DopingFormationCalculator.analyze_doping_sites).
+                  Kept exactly as before.
+
+------------------------------------------------------------------------------
+FORMATION-ENERGY FORMULA  (legacy mode)
+------------------------------------------------------------------------------
+We do NOT special-case "which dopant replaced which host". Exactly like the
+defect/functionalization scripts, we read the change in composition straight from
+the two structures and reference every changed element to its own elemental
+chemical potential:
+
+    E_form = E_doped - E_pristine - Σ_i  Δn_i · μ_i
+
+    Δn_i = n_i(doped) - n_i(pristine)        (per element i)
+    μ_i  = elemental chemical potential of i (reservoir energy per atom)
+
+Sign convention: an *added* atom (Δn_i > 0) is taken from a reservoir at cost
+μ_i, so it lowers E_form by μ_i; a *removed* atom (Δn_i < 0) is returned to the
+reservoir, raising E_form by μ_i. For a substitutional N→C swap this reduces to
+the familiar  E_doped - E_pristine + μ_C - μ_N  (Δn_C = -1, Δn_N = +1).
+
+------------------------------------------------------------------------------
+CHEMICAL POTENTIALS — computed dynamically with the SAME calculator
+------------------------------------------------------------------------------
+Mirrors the functionalization script so the energy scale matches the active
+calculator (SevenNet / GPAW):
+    C : energy/atom of relaxed graphene          (utils.calculate_element_mu)
+    H : E(H2)/2                                   (utils.calculate_mu_H)
+    N : E(N2)/2,  O : E(O2)/2,  F : E(F2)/2, ...  (gas-phase diatomic, /2)
+
+Elements with no gas-phase diatomic / graphene reference (B, P, S, Li) fall back
+to hard-coded literature values (bulk α-boron, white P4, orthorhombic S, bcc Li).
+Those values are on a DIFFERENT energy scale than the active calculator, so the
+fallback is flagged loudly — provide a proper bulk reference for publication-grade
+numbers. Only the elements that actually change across the requested comparisons
+are computed, so no reference molecule is relaxed needlessly.
+
+Outputs (legacy mode) to  legacy_doping_<pristine>_vs_<doped>_<calc>/ :
+    input_<...>                       copied input files
+    relaxed_structures_xyz/           relaxed pristine + doped (XYZ)
+    relaxed_structures_mol/           relaxed pristine + doped (MOL, bonds kept)
+    doping_energy_analysis.txt        full thermodynamic breakdown
+"""
+
 import os
 import shutil
 import logging
-from dataclasses import dataclass
-from typing import Dict, Tuple, List
+from typing import List, Tuple
+
 import numpy as np
 from ase.io import read, write
 from ase.optimize import BFGS
 from ase.visualize.plot import plot_atoms
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from scipy import stats
 
+import settings  # noqa: F401  (side effect: applies the project matplotlib style)
+import cache
 from config import molecules_data
+from GQD_basic_defects import setup_calculator, FMAX
 from utils import determine_target_element
-
-# Set global font properties for all plots
-mpl.rcParams['font.family'] = 'Times New Roman'
-mpl.rcParams['font.size'] = 12
-mpl.rcParams['axes.titlesize'] = 16
-mpl.rcParams['axes.labelsize'] = 14
-mpl.rcParams['xtick.labelsize'] = 12
-mpl.rcParams['ytick.labelsize'] = 12
-mpl.rcParams['legend.fontsize'] = 12
-mpl.rcParams['figure.titlesize'] = 18
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# MOL I/O helpers (used by the automated site-map mode)
+# ============================================================================
 def read_bonds_from_mol(filepath):
     """
     Read bond information from MOL file.
@@ -137,49 +191,229 @@ def save_structure_file(atoms, xyz_path, mol_path, original_bonds=None):
     write_mol_with_bonds(atoms, mol_path, original_bonds=original_bonds)
 
 
-@dataclass
-class DopingResult:
-    """
-    Doping calculation result with proper cell size normalization.
+# ============================================================================
+# Chemical potentials (legacy mode) — dynamic + cached, via cache.py
+# ============================================================================
+# Hard-coded literature fallback (eV/atom) for elements with no gas-phase diatomic
+# or graphene reference: bulk α-boron, white P4, orthorhombic S, bcc Li. These are
+# on a DIFFERENT energy scale than the active calculator -> flagged when used.
+_FALLBACK_MU = {
+    'B': -6.678, 'P': -5.641, 'S': -4.136, 'Li': -1.82,
+}
 
-    Physical interpretation:
-    - formation_energy: Total ΔE_f for the cell [eV]
-    - formation_energy_per_dopant: ΔE_f normalized per dopant atom [eV/dopant]
-    - uncertainty: Statistical error from DFT and chemical potential uncertainties [eV]
-    - components: Energy breakdown for analysis [eV]
-    - dopant_info: Dopant type, count, and concentration
-    - validation_flags: Physical reasonableness checks
+
+def build_chemical_potentials(calc, calc_name, elements):
+    """Build {element: mu} for exactly the elements requested, with caching.
+
+    C/H and the diatomic-forming elements (N/O/F/Cl) are fetched through
+    cache.get_chemical_potential (graphene / E(H2)/2 / E(X2)/2), so those
+    reference relaxations run at most once per calculator across all runs.
+    B/P/S/Li fall back to hard-coded literature values (flagged, since their
+    energy scale need not match the active calculator). Raises for any element
+    with neither reference so mistakes are loud.
     """
-    formation_energy: float  # Total formation energy for cell [eV]
-    formation_energy_per_dopant: float  # Per-dopant energy (cell-size independent) [eV]
-    uncertainty: float  # Total uncertainty [eV]
-    components: Dict[str, float]  # Energy components [eV]
-    dopant_info: Dict[str, any]  # Dopant details
-    validation_flags: List[str]  # Validation warnings
+    mu = {}
+    for el in sorted(elements):
+        try:
+            mu[el] = cache.get_chemical_potential(el, calc, calc_name, fmax=FMAX)
+        except ValueError:
+            if el not in _FALLBACK_MU:
+                raise
+            mu[el] = _FALLBACK_MU[el]                     # literature bulk reference
+            print(f"  WARNING: mu({el}) = {mu[el]:.4f} eV is a hard-coded literature "
+                  f"value; its energy scale may NOT match the active calculator. "
+                  f"Provide a bulk reference for publication-grade numbers.")
+        print(f"  mu({el}) = {mu[el]:.4f} eV")
+    return mu
+
+
+# ============================================================================
+# Structure / relaxation helpers (legacy mode)
+# ============================================================================
+def _load_centered(mol_key, calc):
+    """Read a config.py structure, center it in its cell, attach the calculator."""
+    mol_path = molecules_data[mol_key]["path"]
+    cell = molecules_data[mol_key]["cell"]
+
+    atoms = read(mol_path)
+    positions = atoms.get_positions()
+    com = np.mean(positions, axis=0)
+    translation = np.array([cell / 2] * 3) - com
+    atoms.set_positions(positions + translation)
+    atoms.set_cell([cell] * 3)
+    atoms.set_pbc(True)
+
+    if mol_path.endswith('.mol'):
+        bonds = read_bonds_from_mol(mol_path)
+        if bonds:
+            atoms.info['original_bonds'] = bonds
+
+    atoms.calc = calc
+    return atoms, mol_path
+
+
+def _composition(atoms):
+    comp = {}
+    for sym in atoms.get_chemical_symbols():
+        comp[sym] = comp.get(sym, 0) + 1
+    return comp
+
+
+def compare_doping(pristine_key, pristine, E_pristine, comp_pristine,
+                   doped_key, calc, calc_name, mu):
+    """Relax the doped structure (pristine is pre-relaxed) and report E_form.
+
+    pristine, E_pristine, comp_pristine are passed in already-computed so a series
+    of comparisons against the same pristine reference re-uses one relaxation.
+    """
+    print(f"\n{'=' * 60}")
+    print(f"DOPING FORMATION ENERGY: {pristine_key} -> {doped_key}")
+    print(f"{'=' * 60}")
+
+    doped, doped_path = _load_centered(doped_key, calc)
+    pristine_path = molecules_data[pristine_key]["path"]
+
+    doped, E_doped = cache.load_or_relax(
+        doped, doped_key, calc, calc_name, fmax=FMAX,
+        cell=molecules_data[doped_key]["cell"],
+        label=f"doped ({doped_key})")
+
+    comp_doped = _composition(doped)
+
+    # ---- composition change, per element ----
+    elements = sorted(set(comp_pristine) | set(comp_doped))
+    deltas = {el: comp_doped.get(el, 0) - comp_pristine.get(el, 0) for el in elements}
+    changed = {el: d for el, d in deltas.items() if d != 0}
+
+    # ---- formation energy ----
+    # E_form = E_doped - E_pristine - Σ_i Δn_i·μ_i  (added atom -> -μ, removed -> +μ)
+    # Computed by hand from the cached float E_pristine: re-evaluating pristine here
+    # would be silently recomputed by the shared calculator (its internal cache was
+    # just overwritten by the doped relaxation) and erase the speedup.
+    mu_terms = {el: deltas[el] * mu[el] for el in changed}
+    mu_total = sum(mu_terms.values())
+    E_form = E_doped - E_pristine - mu_total
+
+    added = {el: d for el, d in changed.items() if d > 0}
+    removed = {el: -d for el, d in changed.items() if d < 0}
+
+    # ---- doping classification (substitutional / interstitial / vacancy) ----
+    n_added = sum(d for el, d in changed.items() if d > 0 and el != 'C')
+    n_C_removed = -deltas.get('C', 0) if deltas.get('C', 0) < 0 else 0
+    if n_added > 0 and n_C_removed > 0:
+        doping_type = "substitutional"
+    elif n_added > 0 and n_C_removed == 0:
+        doping_type = "interstitial / addition"
+    elif n_added == 0 and n_C_removed > 0:
+        doping_type = "vacancy"
+    else:
+        doping_type = "rearrangement"
+
+    # ---- results directory ----
+    results_dir = f"legacy_doping_{pristine_key}_vs_{doped_key}_{calc_name}"
+    os.makedirs(results_dir, exist_ok=True)
+    xyz_dir = os.path.join(results_dir, "relaxed_structures_xyz")
+    mol_dir = os.path.join(results_dir, "relaxed_structures_mol")
+    os.makedirs(xyz_dir, exist_ok=True)
+    os.makedirs(mol_dir, exist_ok=True)
+
+    for key, path in [(pristine_key, pristine_path), (doped_key, doped_path)]:
+        if os.path.exists(path):
+            shutil.copy(path, os.path.join(results_dir, f"input_{os.path.basename(path)}"))
+
+    # Save calculator-free copies: the shared calculator caches results from the
+    # last-evaluated structure, which would otherwise corrupt the writers.
+    save_structure_file(
+        pristine.copy(),
+        os.path.join(xyz_dir, f"{pristine_key}_relaxed.xyz"),
+        os.path.join(mol_dir, f"{pristine_key}_relaxed.mol"),
+        original_bonds=pristine.info.get('original_bonds'),
+    )
+    save_structure_file(
+        doped.copy(),
+        os.path.join(xyz_dir, f"{doped_key}_relaxed.xyz"),
+        os.path.join(mol_dir, f"{doped_key}_relaxed.mol"),
+        original_bonds=doped.info.get('original_bonds'),
+    )
+
+    # ---- human-readable description of what changed ----
+    added_str = ", ".join(f"{el}x{n}" for el, n in added.items()) or "none"
+    removed_str = ", ".join(f"{el}x{n}" for el, n in removed.items()) or "none"
+
+    # ---- analysis text ----
+    lines = [
+        "=" * 70,
+        "DOPING FORMATION ENERGY ANALYSIS",
+        "=" * 70,
+        "",
+        f"Pristine system: {pristine_key}",
+        f"Doped system:    {doped_key}",
+        f"Calculator:      {calc_name}",
+        f"Doping type:     {doping_type}",
+        "",
+        "Composition (pristine -> doped, per element):",
+    ]
+    for el in elements:
+        lines.append(
+            f"  {el:2s}: {comp_pristine.get(el, 0):3d} -> {comp_doped.get(el, 0):3d}  "
+            f"(delta_n = {deltas[el]:+d})"
+        )
+    lines += [
+        "",
+        f"  atoms added:   {added_str}",
+        f"  atoms removed: {removed_str}",
+        "",
+        "Energy components:",
+        f"  E(pristine): {E_pristine:.6f} eV",
+        f"  E(doped):    {E_doped:.6f} eV",
+        f"  delta_E:     {E_doped - E_pristine:.6f} eV",
+        "",
+        "Chemical-potential terms  (-delta_n_i * mu_i, summed below):",
+    ]
+    for el in sorted(changed):
+        lines.append(
+            f"  {el:2s}: delta_n = {deltas[el]:+d}  *  mu = {mu[el]:.6f} eV"
+            f"   ->  {-mu_terms[el]:+.6f} eV"
+        )
+    lines += [
+        f"  ----  total -Sigma delta_n*mu = {-mu_total:+.6f} eV",
+        "",
+        "=" * 70,
+        "  E_form = E_doped - E_pristine - Sum_i delta_n_i * mu_i",
+        f"  E_form = {E_form:.6f} eV",
+        "=" * 70,
+    ]
+    text = "\n".join(lines)
+    print("\n" + text)
+
+    with open(os.path.join(results_dir, "doping_energy_analysis.txt"),
+              "w", encoding="utf-8") as f:
+        f.write(text + "\n")
+
+    print(f"\nResults saved to: {results_dir}/")
+    print(f"  - doping_energy_analysis.txt")
+    print(f"  - relaxed_structures_xyz/ , relaxed_structures_mol/")
+    return E_form
 
 
 class DopingFormationCalculator:
     """
-    Doping formation energy calculator with proper cell size normalization.
+    Doping formation energy calculator — automated site-map mode.
 
-    Theoretical framework:
-    For substitutional doping in cell with N atoms and n dopants:
-    ΔE_f = E(doped) - E(pristine) + n_removed × μ(host) - n_added × μ(dopant)
+    Scans every substitution site of a GQD for a chosen dopant element and builds
+    an energy map + statistical distribution (analyze_doping_sites). The legacy
+    pairwise comparison now lives in the module-level compare_doping() function.
 
-    Cell-size independent formation energy:
-    ΔE_f_per_dopant = ΔE_f / n_dopants
-
-    This allows comparison between different cell sizes and concentrations.
+    Note: this automated mode uses the hard-coded chemical_potentials dict below
+    (with uncertainties) rather than the dynamically-computed mu of the legacy mode.
     """
 
-    def __init__(self, calculator, fmax=0.05, calc_name="MLIP"):
+    def __init__(self, calculator, fmax=FMAX, calc_name="MLIP"):
         """
-        Initialize calculator with quantum mechanical parameters.
-
         Args:
-            calculator: DFT calculator (e.g., SevenNet)
+            calculator: ASE calculator (e.g., SevenNet or GPAW)
             fmax: Force convergence criterion [eV/Å]
-            calc_name: Name of the calculator for result folder naming (e.g., "GPAW" or "MLIP")
+            calc_name: Name of the calculator for result folder naming
         """
         self.calc = calculator
         self.fmax = fmax
@@ -202,417 +436,6 @@ class DopingFormationCalculator:
             'F': (-1.912, 0.025),  # F2/2 reference
             'Li': (-1.82, 0.05),
         }
-
-    def calculate_doping_energy(self, pristine_key: str, doped_key: str,
-                               save_structures: bool = False, results_dir: str = None) -> DopingResult:
-        """
-        Calculate doping formation energy with cell size normalization.
-
-        Process:
-        1. Calculate total energies for pristine and doped systems
-        2. Identify dopant type and count
-        3. Apply chemical potential corrections
-        4. Normalize per dopant for cell-size independence
-        5. Propagate uncertainties
-        6. Validate results
-
-        Args:
-            pristine_key: Key for pristine structure in molecules_data
-            doped_key: Key for doped structure in molecules_data
-
-        Returns:
-            DopingResult with normalized formation energy
-        """
-
-        # Step 1: Calculate energies
-        if save_structures:
-            E_pristine, forces_pristine, atoms_pristine = self._get_energy(pristine_key, return_atoms=True)
-            E_doped, forces_doped, atoms_doped = self._get_energy(doped_key, return_atoms=True)
-        else:
-            E_pristine, forces_pristine = self._get_energy(pristine_key)
-            E_doped, forces_doped = self._get_energy(doped_key)
-
-        # Step 2: Analyze doping configuration
-        dopant_info = self._analyze_doping(pristine_key, doped_key)
-
-        # Step 3: Calculate chemical potential corrections
-        mu_correction, mu_uncertainty = self._calculate_chemical_potentials(dopant_info)
-
-        # Step 4: Formation energy calculation
-        # Total formation energy for the cell
-        formation_energy_total = E_doped - E_pristine + mu_correction
-
-        # Normalized per dopant (cell-size independent)
-        n_dopants = dopant_info['n_dopants']
-        formation_energy_per_dopant = formation_energy_total / n_dopants if n_dopants > 0 else formation_energy_total
-
-        # Step 5: Uncertainty propagation
-        # σ²(total) = σ²(DFT) + σ²(μ)
-        dft_uncertainty = 0.001  # 1 meV DFT convergence error
-        uncertainty = np.sqrt(
-            (mu_uncertainty) ** 2 +
-            (dft_uncertainty * 2) ** 2  # Two DFT calculations
-        )
-        uncertainty_per_dopant = uncertainty / n_dopants if n_dopants > 0 else uncertainty
-
-        # Step 6: Validation
-        validation_flags = self._validate_result(
-            formation_energy_per_dopant, dopant_info, forces_pristine, forces_doped
-        )
-
-        # Energy components for analysis
-        components = {
-            'E_doped': E_doped,
-            'E_pristine': E_pristine,
-            'delta_E': E_doped - E_pristine,
-            'mu_correction': mu_correction,
-            'mu_host': dopant_info.get('mu_host_total', 0),
-            'mu_dopant': dopant_info.get('mu_dopant_total', 0),
-        }
-
-        # Print detailed breakdown
-        self._print_analysis(
-            dopant_info, components, formation_energy_total,
-            formation_energy_per_dopant, uncertainty_per_dopant
-        )
-
-        # Save relaxed structures if requested
-        if save_structures and results_dir is not None:
-            import os
-            import shutil
-
-            os.makedirs(results_dir, exist_ok=True)
-
-            # Create subdirectories for XYZ and MOL formats
-            structures_xyz_dir = os.path.join(results_dir, "relaxed_structures_xyz")
-            structures_mol_dir = os.path.join(results_dir, "relaxed_structures_mol")
-            os.makedirs(structures_xyz_dir, exist_ok=True)
-            os.makedirs(structures_mol_dir, exist_ok=True)
-
-
-            # Save pristine structure
-            pristine_xyz = os.path.join(structures_xyz_dir, f"{pristine_key}_relaxed.xyz")
-            pristine_mol = os.path.join(structures_mol_dir, f"{pristine_key}_relaxed.mol")
-            pristine_bonds = atoms_pristine.info.get('original_bonds', None)
-            #save_structure_file(atoms_pristine, pristine_xyz, pristine_mol, original_bonds=pristine_bonds)
-            logger.info(f"Saved pristine structure: {pristine_xyz} and {pristine_mol}")
-
-            # Save doped structure
-            doped_xyz = os.path.join(structures_xyz_dir, f"{doped_key}_relaxed.xyz")
-            doped_mol = os.path.join(structures_mol_dir, f"{doped_key}_relaxed.mol")
-            doped_bonds = atoms_doped.info.get('original_bonds', None)
-            save_structure_file(atoms_doped, doped_xyz, doped_mol, original_bonds=doped_bonds)
-            logger.info(f"Saved doped structure: {doped_xyz} and {doped_mol}")
-
-            # Copy input files to results directory for reference
-            for key in [pristine_key, doped_key]:
-                input_path = molecules_data[key]["path"]
-                if os.path.exists(input_path):
-                    shutil.copy(input_path, os.path.join(results_dir, f"input_{os.path.basename(input_path)}"))
-
-            # Save doping energy analysis to text file
-            summary_file = os.path.join(results_dir, "doping_energy_analysis.txt")
-            with open(summary_file, 'w') as f:
-                f.write("=" * 70 + "\n")
-                f.write("DOPING FORMATION ENERGY ANALYSIS\n")
-                f.write("=" * 70 + "\n\n")
-
-                f.write(f"Pristine system: {pristine_key}\n")
-                f.write(f"Doped system: {doped_key}\n\n")
-
-                f.write("System Information:\n")
-                f.write(f"  Cell size: {dopant_info['cell_size']} atoms\n")
-                f.write(f"  Doping type: {dopant_info['type']}\n")
-                f.write(f"  Dopant: {dopant_info['dopant_element']} ({dopant_info['n_dopants']} atoms)\n")
-                f.write(f"  Host removed: {dopant_info['host_removed']} ({dopant_info['n_host_removed']} atoms)\n")
-                f.write(f"  Concentration: {dopant_info['concentration']:.2f}%\n\n")
-
-                f.write("Energy Components:\n")
-                f.write(f"  E(pristine): {components['E_pristine']:.6f} eV\n")
-                f.write(f"  E(doped):    {components['E_doped']:.6f} eV\n")
-                f.write(f"  delta_E:          {components['delta_E']:.6f} eV\n\n")
-
-                f.write("Chemical Potentials:\n")
-                if 'mu_host' in components:
-                    f.write(f"  mu(host) x n:   +{components['mu_host']:.6f} eV\n")
-                if 'mu_dopant' in components:
-                    f.write(f"  mu(dopant) x n: -{components['mu_dopant']:.6f} eV\n")
-                f.write(f"  Total correction: {components['mu_correction']:.6f} eV\n\n")
-
-                f.write("=" * 70 + "\n")
-                f.write("RESULTS:\n")
-                f.write(f"  delta_f (total cell):     {formation_energy_total:.6f} eV\n")
-                f.write(f"  delta_f (per dopant):     {formation_energy_per_dopant:.6f} ± {uncertainty_per_dopant:.6f} eV\n")
-                f.write("=" * 70 + "\n\n")
-
-                if validation_flags:
-                    f.write("VALIDATION FLAGS:\n")
-                    for flag in validation_flags:
-                        f.write(f"  - {flag}\n")
-                else:
-                    f.write("VALIDATION: All physical checks passed\n")
-
-                f.write("\n" + "=" * 70 + "\n")
-
-            logger.info(f"Saved doping energy analysis to: {summary_file}")
-
-        return DopingResult(
-            formation_energy=formation_energy_total,
-            formation_energy_per_dopant=formation_energy_per_dopant,
-            uncertainty=uncertainty_per_dopant,
-            components=components,
-            dopant_info=dopant_info,
-            validation_flags=validation_flags
-        )
-
-    def _get_energy(self, mol_key: str, return_atoms: bool = False) -> Tuple:
-        """
-        Calculate optimized energy for a structure.
-
-        Args:
-            mol_key: Key in molecules_data
-            return_atoms: If True, also return relaxed atoms object
-
-        Returns:
-            energy: Total energy [eV]
-            forces: Atomic forces [eV/Å]
-            atoms: Relaxed atoms object (only if return_atoms=True)
-        """
-        # Use cache if available (but only for energy/forces, not atoms)
-        if mol_key in self.energy_cache and not return_atoms:
-            return self.energy_cache[mol_key]
-
-        # Load structure
-        mol_path = molecules_data[mol_key]["path"]
-        atoms = read(mol_path)
-
-        # Set cell and PBC (required by GPAW)
-        cell = molecules_data[mol_key]["cell"]
-        positions = atoms.get_positions()
-        center_of_mass = np.mean(positions, axis=0)
-        translation = np.array([cell / 2] * 3) - center_of_mass
-        atoms.set_positions(positions + translation)
-        atoms.set_cell([cell] * 3)
-        atoms.set_pbc(True)
-
-        # Read and store original bonds if MOL file
-        if mol_path.endswith('.mol'):
-            original_bonds = read_bonds_from_mol(mol_path)
-            if original_bonds:
-                atoms.info['original_bonds'] = original_bonds
-
-        atoms.calc = self.calc
-
-        # Geometry optimization
-        dyn = BFGS(atoms, logfile=None)
-        dyn.run(fmax=self.fmax)
-
-        # Get properties
-        energy = atoms.get_potential_energy()
-        forces = atoms.get_forces()
-
-        # Check convergence
-        max_force = np.max(np.linalg.norm(forces, axis=1))
-        if max_force > self.fmax:
-            logger.warning(f"Poor convergence for {mol_key}: max_force = {max_force:.4f}")
-
-        logger.info(f"Energy for {mol_key}: {energy:.4f} eV (max_force: {max_force:.4f})")
-
-        # Cache result (only energy and forces, not atoms)
-        self.energy_cache[mol_key] = (energy, forces)
-
-        if return_atoms:
-            return energy, forces, atoms
-        return energy, forces
-
-    def _analyze_doping(self, pristine_key: str, doped_key: str) -> Dict:
-        """
-        Analyze doping configuration by comparing structures.
-
-        Args:
-            pristine_key: Pristine structure key
-            doped_key: Doped structure key
-
-        Returns:
-            Dictionary with dopant information
-        """
-        # Load structures
-        pristine = read(molecules_data[pristine_key]["path"])
-        doped = read(molecules_data[doped_key]["path"])
-
-        # Get compositions
-        comp_pristine = self._get_composition(pristine)
-        comp_doped = self._get_composition(doped)
-
-        # Find changes
-        dopant_info = {
-            'dopant_element': None,
-            'n_dopants': 0,
-            'host_removed': None,
-            'n_host_removed': 0,
-            'type': None,  # substitutional, interstitial, or vacancy
-            'concentration': 0.0,
-            'cell_size': len(pristine),
-        }
-
-        # Identify what changed
-        all_elements = set(comp_pristine.keys()) | set(comp_doped.keys())
-
-        for elem in all_elements:
-            n_pristine = comp_pristine.get(elem, 0)
-            n_doped = comp_doped.get(elem, 0)
-            delta = n_doped - n_pristine
-
-            if delta > 0 and elem not in ['C', 'H']:  # Dopant added
-                dopant_info['dopant_element'] = elem
-                dopant_info['n_dopants'] = delta
-            elif delta < 0 and elem == 'C':  # Carbon removed
-                dopant_info['host_removed'] = elem
-                dopant_info['n_host_removed'] = abs(delta)
-
-        # Classify doping type
-        if dopant_info['n_dopants'] > 0 and dopant_info['n_host_removed'] > 0:
-            dopant_info['type'] = 'substitutional'
-        elif dopant_info['n_dopants'] > 0 and dopant_info['n_host_removed'] == 0:
-            dopant_info['type'] = 'interstitial'
-        elif dopant_info['n_dopants'] == 0 and dopant_info['n_host_removed'] > 0:
-            dopant_info['type'] = 'vacancy'
-
-        # Calculate concentration (% of non-H atoms)
-        n_heavy_atoms = sum(comp_doped.get(elem, 0) for elem in comp_doped if elem != 'H')
-        if n_heavy_atoms > 0:
-            dopant_info['concentration'] = (dopant_info['n_dopants'] / n_heavy_atoms) * 100
-
-        logger.info(f"Doping type: {dopant_info['type']}")
-        logger.info(f"Dopant: {dopant_info['dopant_element']} ({dopant_info['n_dopants']} atoms)")
-        logger.info(f"Concentration: {dopant_info['concentration']:.2f}%")
-
-        return dopant_info
-
-    def _calculate_chemical_potentials(self, dopant_info: Dict) -> Tuple[float, float]:
-        """
-        Calculate chemical potential corrections.
-
-        For substitutional: μ_correction = n_removed × μ(host) - n_added × μ(dopant)
-        For interstitial: μ_correction = -n_added × μ(dopant)
-        For vacancy: μ_correction = n_removed × μ(host)
-
-        Args:
-            dopant_info: Doping configuration
-
-        Returns:
-            mu_total: Total chemical potential correction [eV]
-            uncertainty: Combined uncertainty [eV]
-        """
-        mu_total = 0.0
-        uncertainty_sq = 0.0
-
-        # Host atom contribution (for substitutional and vacancy)
-        if dopant_info['n_host_removed'] > 0:
-            host_elem = dopant_info['host_removed'] or 'C'
-            if host_elem in self.chemical_potentials:
-                mu_host, sigma_host = self.chemical_potentials[host_elem]
-                mu_host_total = dopant_info['n_host_removed'] * mu_host
-                mu_total += mu_host_total
-                uncertainty_sq += (dopant_info['n_host_removed'] * sigma_host) ** 2
-                dopant_info['mu_host_total'] = mu_host_total
-
-        # Dopant contribution (for substitutional and interstitial)
-        if dopant_info['n_dopants'] > 0 and dopant_info['dopant_element']:
-            dopant_elem = dopant_info['dopant_element']
-            if dopant_elem in self.chemical_potentials:
-                mu_dopant, sigma_dopant = self.chemical_potentials[dopant_elem]
-                mu_dopant_total = dopant_info['n_dopants'] * mu_dopant
-                mu_total -= mu_dopant_total  # Negative because dopants are added
-                uncertainty_sq += (dopant_info['n_dopants'] * sigma_dopant) ** 2
-                dopant_info['mu_dopant_total'] = mu_dopant_total
-
-        return mu_total, np.sqrt(uncertainty_sq)
-
-    def _get_composition(self, atoms) -> Dict[str, int]:
-        """Get atomic composition of structure."""
-        composition = {}
-        for symbol in atoms.get_chemical_symbols():
-            composition[symbol] = composition.get(symbol, 0) + 1
-        return composition
-
-    def _validate_result(self, formation_energy_per_dopant: float, dopant_info: Dict,
-                         forces_pristine: np.ndarray, forces_doped: np.ndarray) -> List[str]:
-        """
-        Validate results against known physics.
-
-        Args:
-            formation_energy_per_dopant: Per-dopant formation energy [eV]
-            dopant_info: Doping configuration
-            forces_pristine: Forces on pristine system [eV/Å]
-            forces_doped: Forces on doped system [eV/Å]
-
-        Returns:
-            List of validation flags
-        """
-        flags = []
-
-        # Convergence check
-        max_force_pristine = np.max(np.linalg.norm(forces_pristine, axis=1))
-        max_force_doped = np.max(np.linalg.norm(forces_doped, axis=1))
-
-        if max_force_pristine > self.fmax or max_force_doped > self.fmax:
-            flags.append("POOR_CONVERGENCE")
-
-        # Energy range checks
-        if dopant_info['type'] == 'substitutional':
-            if formation_energy_per_dopant < -3.0:
-                flags.append("VERY_FAVORABLE")
-            elif formation_energy_per_dopant > 8.0:
-                flags.append("VERY_UNFAVORABLE")
-
-        # Concentration warning
-        if dopant_info['concentration'] > 10:
-            flags.append("HIGH_CONCENTRATION")
-            logger.warning(f"High dopant concentration: {dopant_info['concentration']:.1f}%")
-
-        # Thermodynamic classification
-        if formation_energy_per_dopant < 0:
-            flags.append("SPONTANEOUS")
-        elif formation_energy_per_dopant < 2.0:
-            flags.append("THERMALLY_ACCESSIBLE")
-        else:
-            flags.append("HIGH_BARRIER")
-
-        return flags
-
-    def _print_analysis(self, dopant_info: Dict, components: Dict,
-                        formation_energy_total: float, formation_energy_per_dopant: float,
-                        uncertainty: float) -> None:
-        """Print detailed analysis of results."""
-        print(f"\n{'=' * 60}")
-        print("DOPING FORMATION ENERGY ANALYSIS")
-        print(f"{'=' * 60}")
-
-        print(f"\nSystem Information:")
-        print(f"  Cell size: {dopant_info['cell_size']} atoms")
-        print(f"  Doping type: {dopant_info['type']}")
-        print(f"  Dopant: {dopant_info['dopant_element']} ({dopant_info['n_dopants']} atoms)")
-        print(f"  Host removed: {dopant_info['host_removed']} ({dopant_info['n_host_removed']} atoms)")
-        print(f"  Concentration: {dopant_info['concentration']:.2f}%")
-
-        print(f"\nEnergy Components:")
-        print(f"  E(pristine): {components['E_pristine']:.4f} eV")
-        print(f"  E(doped):    {components['E_doped']:.4f} eV")
-        print(f"  ΔE:          {components['delta_E']:.4f} eV")
-
-        print(f"\nChemical Potentials:")
-        if 'mu_host_total' in dopant_info:
-            print(f"  μ(host) × n:   +{dopant_info['mu_host_total']:.4f} eV")
-        if 'mu_dopant_total' in dopant_info:
-            print(f"  μ(dopant) × n: -{dopant_info['mu_dopant_total']:.4f} eV")
-        print(f"  Total correction: {components['mu_correction']:.4f} eV")
-
-        print(f"\n{'=' * 60}")
-        print(f"RESULTS:")
-        print(f"  ΔE_f (total cell):     {formation_energy_total:.4f} eV")
-        print(f"  ΔE_f (per dopant):     {formation_energy_per_dopant:.4f} ± {uncertainty:.4f} eV")
-        print(f"{'=' * 60}")
 
     def analyze_doping_sites(self, mol_path: str, dopant_element: str, molecule_name: str,
                            show_atom_idx: bool = True, excluded_atoms: List[int] = None,
@@ -679,12 +502,13 @@ class DopingFormationCalculator:
 
         target_element, _ = determine_target_element(base_atoms)
 
-        # Calculate pristine energy
+        # Relax the pristine base structure (cached on disk: the base is a
+        # config-key structure shared with the legacy mode and re-used across
+        # runs). The per-site doped relaxations below are NOT cached.
         base_atoms.calc = self.calc
-        print("Relaxing base structure...")
-        dyn = BFGS(base_atoms, logfile=None)
-        dyn.run(fmax=self.fmax)
-        E_pristine = base_atoms.get_potential_energy()
+        base_atoms, E_pristine = cache.load_or_relax(
+            base_atoms, molecule_name, self.calc, self.calc_name,
+            fmax=self.fmax, cell=cell, label=f"base ({molecule_name})")
 
         # Initialize results
         formation_energies = []
@@ -915,58 +739,18 @@ class DopingFormationCalculator:
             f.write(f"----------------------------------------\n")
 
 
-
-
 def main():
     """
-    Demonstration of the improved doping analyzer.
+    Doping formation-energy driver.
 
-    Now supports two modes:
-    1. Legacy mode: Compare pre-existing doped molecules
-    2. NEW mode: Automatically analyze all doping sites for a given GQD and dopant element
+    Two modes:
+      1. "legacy"    — compare a pristine GQD against one OR MORE pre-made doped
+                       GQDs (dynamic mu, pristine relaxed once, detailed logs +
+                       file output, mirrors the functionalization script).
+      2. "automated" — scan every substitution site of a GQD for a dopant element
+                       and build an energy map (kept as-is).
     """
-    import platform
-    import sys
-
-    # Initialize calculator based on operating system
-    system = platform.system()
-
-    if system == "Linux":
-        print(f"Running on {system} - using GPAW calculator")
-        from gpaw import GPAW, PW, FermiDirac
-
-        calc = GPAW(
-            xc='PBE',
-            mode=PW(500),  # Reduced from 400 - still reasonable for C-C bond breaking
-            kpts=(1, 1, 1),
-            symmetry='off',
-            spinpol=True,  # Keep this - essential for radicals
-            occupations=FermiDirac(0.05),  # Increased smearing - faster SCF convergence
-            convergence={
-                'energy': 0.001,  # Relaxed from 0.0005 (1 meV is fine for formation energies)
-                'density': 1e-4,  # Much looser - 1e-6 is overkill
-                'eigenstates': 1e-6,  # Looser from 1e-8
-            },
-            mixer={'backend': 'pulay', 'beta': 0.1, 'nmaxold': 5, 'weight': 50},  # Faster mixing
-            maxiter=300,  # Explicit limit to catch non-convergence earlier
-            txt='calculation.txt',
-        )
-    elif system == "Windows":
-        print(f"Running on {system} - using SevenNet calculator")
-        from sevenn.calculator import SevenNetCalculator
-
-        calc = SevenNetCalculator('7net-omni-i12', modal='mpa')
-    else:
-        print(f"Warning: Running on {system} - defaulting to SevenNet calculator")
-        from sevenn.calculator import SevenNetCalculator
-
-        calc = SevenNetCalculator('7net-omni-i12', modal='mpa')
-
-    # Determine calculator name for result folders
-    calc_name = "GPAW" if system == "Linux" else "MLIP"
-
-    # Create calculator
-    calculator = DopingFormationCalculator(calc, fmax=0.05, calc_name=calc_name)
+    calc, calc_name = setup_calculator()
 
     # ============================================================
     # CONFIGURATION
@@ -974,48 +758,64 @@ def main():
     mode = "legacy"  # "legacy" or "automated"
 
     # ============================================================
-    # MODE 1: Legacy - Compare pre-existing doped molecules
+    # MODE 1: Legacy - compare pristine vs one or more pre-made doped GQDs
     # ============================================================
     if mode == "legacy":
-        # Common dopants: 'N' 'B' 'P' 'S' 'O' 'F'
-        print("\n1. LEGACY MODE - DOPED GQD:")
+        print("\n1. LEGACY MODE - DOPED GQDs:")
 
+        # Both pristine_key and every doped_key must exist in config.py.
+        # Several doped structures can be compared in one run; the pristine
+        # reference is relaxed only ONCE and shared across all of them.
         pristine_key = "GQD_HEX_2_2"
-        doped_key = "GQD_HEX_2_2_NH2"
+        doped_keys = ["GQD_HEX_2_2_NH2"]
 
-        # Create results directory for legacy mode
-        results_dir = f"legacy_doping_{pristine_key}_vs_{doped_key}_{calculator.calc_name}"
-
-        result = calculator.calculate_doping_energy(
-            pristine_key=pristine_key,
-            doped_key=doped_key,
-            save_structures=True,  # Enable structure saving
-            results_dir=results_dir  # Save to this directory
-        )
-
-        # Comparison
-        print(f"\n{'=' * 60}")
-        print("COMPARISON (per-dopant energies):")
-        print(f"  N-doping: {result.formation_energy_per_dopant:.3f} ± {result.uncertainty:.3f} eV")
-        print(f"\n⚠️ Note: concentration is {result.dopant_info['concentration']:.1f}%")
-        print(f"{'=' * 60}")
+        # ---- which elements CHANGE across all comparisons (build mu only for these) ----
+        # Only elements whose count differs contribute a Δn·μ term, so e.g. an
+        # unchanged carbon backbone never triggers a graphene relaxation.
+        comp_pristine = _composition(read(molecules_data[pristine_key]["path"]))
+        needed_elements = set()
+        for dkey in doped_keys:
+            comp_d = _composition(read(molecules_data[dkey]["path"]))
+            for el in set(comp_pristine) | set(comp_d):
+                if comp_d.get(el, 0) != comp_pristine.get(el, 0):
+                    needed_elements.add(el)
 
         print(f"\n{'=' * 60}")
-        print(f"Results saved to: {results_dir}/")
-        print(f"  - doping_energy_analysis.txt: Complete thermodynamic analysis")
-        print(f"  - relaxed_structures_xyz/: XYZ format files")
-        print(f"  - relaxed_structures_mol/: MOL format files with bonds")
-        print(f"  - input_*.mol: Original input files")
+        print("CHEMICAL POTENTIALS (computed with the active calculator)")
         print(f"{'=' * 60}")
+        mu = build_chemical_potentials(calc, calc_name, needed_elements)
+
+        # Relax pristine ONCE: every comparison shares the same reference. The
+        # relaxation is cached on disk, so repeated runs reuse it entirely.
+        print(f"\n{'=' * 60}")
+        print(f"PRISTINE REFERENCE: {pristine_key}")
+        print(f"{'=' * 60}")
+        pristine, _ = _load_centered(pristine_key, calc)
+        pristine, E_pristine = cache.load_or_relax(
+            pristine, pristine_key, calc, calc_name, fmax=FMAX,
+            cell=molecules_data[pristine_key]["cell"],
+            label=f"pristine ({pristine_key})")
+        comp_pristine = _composition(pristine)
+
+        results = {}
+        for doped_key in doped_keys:
+            results[doped_key] = compare_doping(
+                pristine_key, pristine, E_pristine, comp_pristine,
+                doped_key, calc, calc_name, mu)
+
+        print(f"\n{'=' * 60}")
+        print("SUMMARY")
+        print(f"{'=' * 60}")
+        for doped_key, e_form in results.items():
+            print(f"  {doped_key:28s}  E_form = {e_form:.4f} eV")
 
     # ============================================================
-    # MODE 2: NEW - Automatically analyze all doping sites
+    # MODE 2: Automated - scan all doping sites for one dopant element
     # ============================================================
     elif mode == "automated":
-        # Usage: Just pass the GQD mol file and dopant element
-        # Creates energy maps and statistical analysis automatically
+        print("\n2. AUTOMATED MODE - Doping Site Analysis:")
 
-        print("\n2. NEW MODE - Automated Doping Site Analysis:")
+        calculator = DopingFormationCalculator(calc, fmax=FMAX, calc_name=calc_name)
 
         # Configuration
         molecule_name = "GQD_HEXAGON_3_3"  # Choose which molecule to analyze
@@ -1024,10 +824,8 @@ def main():
         excluded_atoms = []     # Optionally exclude specific atoms
         replace_H = False       # Set True to also analyze H replacement (wider energy map)
 
-        # Get molecule path from config
         mol_path = molecules_data[molecule_name]["path"]
 
-        # Run automated analysis
         atom_indices, formation_energies = calculator.analyze_doping_sites(
             mol_path=mol_path,
             dopant_element=dopant_element,

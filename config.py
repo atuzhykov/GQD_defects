@@ -64,6 +64,18 @@ molecules_data = {
         "path": os.path.join("data", "GQD_HEX_2_2.mol"),
         "cell": 30   # max_extent=9.2 A
     },
+    "GQD_HEX_2_2_func_all": {
+        "path": os.path.join("data", "GQD_HEX_2_2_func_all.mol"),
+        "cell": 35   # multi-functionalized (-COOH,-OH,-NH2,epoxy); max_extent=11.4 A
+    },
+    "GQD_HEX_2_2_OH": {
+        "path": os.path.join("data", "GQD_HEX_2_2_OH.mol"),
+        "cell": 30   # max_extent=9.8 A
+    },
+    "GQD_HEX_2_2_NH2": {
+        "path": os.path.join("data", "GQD_HEX_2_2_NH2.mol"),
+        "cell": 35   # max_extent=10.1 A
+    },
     "GQD_HEX_3_3": {
         "path": os.path.join("data", "GQD_HEXAGON_3_3.mol"),
         "cell": 39   # max_extent=14.0 A (39 > required 35)
@@ -79,5 +91,13 @@ molecules_data = {
     "input_pyrene_C16H10": {
         "path": os.path.join("data", "input_pyrene_C16H10.mol"),
         "cell": 30   # max_extent=8.0 A
+    },
+    "pyrene_V_edge": {
+        "path": os.path.join("data", "pyrene_V_edge.mol"),
+        "cell": 30   # edge monovacancy of pyrene (C0 + H16 removed)
+    },
+    "pyrene_VV_edge": {
+        "path": os.path.join("data", "pyrene_VV_edge.mol"),
+        "cell": 30   # edge divacancy of pyrene (C0,C1 + H16,H17 removed)
     },
 }

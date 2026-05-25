@@ -1,11 +1,8 @@
-import datetime
-import os
-
 import numpy as np
-from ase.constraints import FixAtoms
-from ase.io import Trajectory
 from ase.io import read
 from ase.optimize import FIRE
+
+from settings import FMAX
 
 
 def calculate_mu_H(calculator):
@@ -21,7 +18,7 @@ def calculate_mu_H(calculator):
     h2.set_pbc(True)
     h2.set_calculator(calculator)
     optimizer = FIRE(h2)
-    optimizer.run(fmax=0.05)
+    optimizer.run(fmax=FMAX)
     return h2.get_potential_energy() / 2
 
 
@@ -78,7 +75,7 @@ def calculate_mu_C(calculator):
     graphene = make_supercell(primitive, np.diag([3, 3, 1]))
     graphene.set_calculator(calculator)
     optimizer = FIRE(graphene)
-    optimizer.run(fmax=0.05)
+    optimizer.run(fmax=FMAX)
     return graphene.get_potential_energy() / len(graphene)
 
 def calculate_element_mu(calculator):
@@ -132,23 +129,31 @@ def move_atom_along_axis(atoms, atom_idx, axis_atom1_idx, axis_atom2_idx, distan
 
 
 def delete_atoms_transform(indices):
+    """Build a transform that deletes the given atom indices.
+
+    Parameters:
+    indices: int or list of int — atom indices to remove
+
+    Returns:
+    callable — transform(atoms) -> ASE Atoms with those atoms deleted
+    """
     def transform(atoms):
         return delete_atom_by_idx(atoms, indices)
 
     return transform
 
 
-def substitute_atoms_transform(indices, symbol):
-    def transform(atoms):
-        modified_atoms = atoms.copy()
-        for index in indices:
-            modified_atoms[index].symbol = symbol
-        return modified_atoms
-
-    return transform
-
-
 def move_atom_transform(atom_idx, axis_atom1_idx, axis_atom2_idx, distance):
+    """Build a transform that slides one atom along an axis defined by two atoms.
+
+    Parameters:
+    atom_idx: int — index of the atom to move
+    axis_atom1_idx, axis_atom2_idx: int — indices defining the axis direction
+    distance: float — signed distance to move along the axis [Å]
+
+    Returns:
+    callable — transform(atoms) -> ASE Atoms with the atom moved
+    """
     def transform(atoms):
         return move_atom_along_axis(atoms, atom_idx, axis_atom1_idx, axis_atom2_idx, distance)
 
@@ -156,6 +161,7 @@ def move_atom_transform(atom_idx, axis_atom1_idx, axis_atom2_idx, distance):
 
 
 def get_distance(atoms, idx1, idx2):
+    """Return the distance [Å] between atoms idx1 and idx2 in an ASE Atoms object."""
     return atoms.get_distance(idx1, idx2)
 
 
@@ -176,6 +182,15 @@ def save_structure(atoms, filename, format='xyz'):
 
 
 def write_traj_xyz(traj_path, output_file):
+    """Convert an ASE trajectory to a multi-frame extended-XYZ file.
+
+    Each frame is written with its lattice and PBC in the comment line so the
+    cell is preserved.
+
+    Parameters:
+    traj_path: str — path to the input .traj file
+    output_file: str — path to the output .xyz file
+    """
     # Load the trajectory file
     atoms_list = read(traj_path, ':')
     with open(output_file, 'w') as f:

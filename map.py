@@ -2,10 +2,6 @@ import os
 import shutil
 from itertools import combinations
 
-import matplotlib as mpl
-# import torch
-# torch.backends.cudnn.enabled = False
-# torch._dynamo.config.suppress_errors = True
 import matplotlib.pyplot as plt
 import numpy as np
 from ase.io import read, write
@@ -15,25 +11,17 @@ from ase.visualize.plot import plot_atoms
 from matplotlib.colors import LinearSegmentedColormap
 from scipy import stats
 
+import cache
 from GQD_basic_defects import setup_calculator, FMAX, BFGS_MAXSTEP
 from config import molecules_data
 from ring_overlay import save_ring_overlay
 from utils import (delete_atom_by_idx, rotate_bond_transform, calculate_formation_energy,
-                   calculate_element_mu, find_bonded_H, calculate_mu_H)
+                   find_bonded_H)
 
 _C_H_CUTOFF = 1.2  # C-H bond cutoff (Å) for find_bonded_H; C-H bond length ≈ 1.09 Å
 
-# Set global font properties for all plots
-mpl.rcParams['font.family'] = 'Times New Roman'
-mpl.rcParams['font.size'] = 12
-
-
-mpl.rcParams['axes.titlesize'] = 16  # Plot titles
-mpl.rcParams['axes.labelsize'] = 14  # Axis labels
-mpl.rcParams['xtick.labelsize'] = 12  # X-axis tick labels
-mpl.rcParams['ytick.labelsize'] = 12  # Y-axis tick labels
-mpl.rcParams['legend.fontsize'] = 12  # Legend text
-mpl.rcParams['figure.titlesize'] = 18  # Figure titles
+# Project-wide plot style (fonts, sizes, DPI) — applied on import
+import settings  # noqa: F401  (side effect: applies the matplotlib style)
 
 
 def save_structure_image(atoms, filepath, title="Structure", show_atom_idx=True):
@@ -132,8 +120,20 @@ def save_structure_file(atoms, xyz_path, mol_path, original_bonds=None):
     write_mol_with_bonds(atoms, mol_path, original_bonds=original_bonds)
 
 
-def setup_structure(molecule_name):
-    """Set up and relax the initial structure"""
+def setup_structure(molecule_name, calc_name=''):
+    """Set up and relax the initial (pristine) structure.
+
+    The relaxation is cached on disk (relaxed_<molecule_name>_<calc>_fmax_<f>_
+    cell_<cell>.xyz under settings.RELAXED_STRUCTURES_DIR) and reused on repeated
+    runs; the per-defect relaxations in the analysis functions are not cached.
+
+    Parameters:
+    molecule_name: str — key from config.py
+    calc_name: str — calculator name used in the cache filename
+
+    Returns:
+    (ase.Atoms, float) — the relaxed base structure and its potential energy
+    """
     # Get parameters from config
     mol_filename = molecules_data[molecule_name]["path"]
     cell = molecules_data[molecule_name]["cell"]
@@ -156,18 +156,12 @@ def setup_structure(molecule_name):
             print(f"Loaded {len(original_bonds)} bonds from input")
             atoms.info['original_bonds'] = original_bonds
 
-    # Set up calculator
+    # Set up calculator and relax (cached on disk, verified on load)
     atoms.set_calculator(calc)
-
-    # Perform initial relaxation
-    print("Relaxing base structure...")
-    optimizer = BFGS(atoms, maxstep=BFGS_MAXSTEP)
-    optimizer.run(fmax=FMAX)
-
-    # Get base energy
-    base_relaxed = atoms.copy()
+    base_relaxed, base_energy = cache.load_or_relax(
+        atoms, molecule_name, calc, calc_name, fmax=FMAX, cell=cell,
+        maxstep=BFGS_MAXSTEP, label=f"base ({molecule_name})")
     base_relaxed.calc = calc
-    base_energy = base_relaxed.get_potential_energy()
     print(f"Base structure energy: {base_energy:.3f} eV")
 
     return base_relaxed, base_energy
@@ -1094,13 +1088,13 @@ if __name__ == "__main__":
 
         calc, calc_name = setup_calculator()
 
-        element_mu = calculate_element_mu(calc)
+        # Chemical potentials (graphene μ_C, ½·E(H₂) μ_H) — cached per calculator
+        element_mu = cache.get_chemical_potential('C', calc, calc_name, fmax=FMAX)
         print(f"Chemical potential mu_C: {element_mu:.3f} eV")
-        # Setup initial structure
-        base_relaxed, base_energy = setup_structure(molecule_name)
+        # Setup initial structure (relaxation cached on disk)
+        base_relaxed, base_energy = setup_structure(molecule_name, calc_name)
 
-        # Chemical potential of H — referenced to H₂ gas (½ × E(H₂)), analogous to μ_C from graphene
-        mu_H = calculate_mu_H(calc)
+        mu_H = cache.get_chemical_potential('H', calc, calc_name, fmax=FMAX)
         print(f"Chemical potential for H (0.5*E(H2) reference): {mu_H:.3f} eV")
 
         # Run selected analysis

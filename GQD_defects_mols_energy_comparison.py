@@ -27,12 +27,11 @@ import shutil
 
 import numpy as np
 from ase.io import read
-from ase.optimize import BFGS
 
+import cache
 from config import molecules_data
-from GQD_basic_defects import setup_calculator, FMAX, BFGS_MAXSTEP
+from GQD_basic_defects import setup_calculator, FMAX
 from map import read_bonds_from_mol, save_structure_file
-from utils import calculate_element_mu, calculate_mu_H
 from ring_overlay import save_ring_overlay
 
 
@@ -58,16 +57,6 @@ def _load_centered(mol_key, calc):
     return atoms, mol_path
 
 
-def _relax(atoms, label):
-    print(f"Relaxing {label} ...")
-    dyn = BFGS(atoms, maxstep=BFGS_MAXSTEP)
-    dyn.run(fmax=FMAX)
-    energy = atoms.get_potential_energy()
-    max_force = np.max(np.linalg.norm(atoms.get_forces(), axis=1))
-    print(f"  {label}: E = {energy:.4f} eV, max_force = {max_force:.4f} eV/A")
-    return energy
-
-
 def _count(atoms, symbol):
     return sum(1 for a in atoms if a.symbol == symbol)
 
@@ -86,7 +75,10 @@ def compare_defect(pristine_key, pristine, E_pristine,
     defect, defect_path = _load_centered(defect_key, calc)
     pristine_path = molecules_data[pristine_key]["path"]
 
-    E_defect = _relax(defect, f"defect ({defect_key})")
+    defect, E_defect = cache.load_or_relax(
+        defect, defect_key, calc, calc_name, fmax=FMAX,
+        cell=molecules_data[defect_key]["cell"],
+        label=f"defect ({defect_key})")
 
     n_C_p, n_C_d = _count(pristine, 'C'), _count(defect, 'C')
     n_H_p, n_H_d = _count(pristine, 'H'), _count(defect, 'H')
@@ -192,10 +184,16 @@ def compare_defect(pristine_key, pristine, E_pristine,
 
 
 def main():
+    """Driver: relax one pristine GQD once, then compare it to each pre-made defect.
+
+    Edit pristine_key / defect_keys below (all keys must exist in config.py).
+    Computes μ_C and μ_H with the active calculator, relaxes the pristine
+    reference a single time, and reports the formation energy of every defect.
+    """
     calc, calc_name = setup_calculator()
 
-    mu_C = calculate_element_mu(calc)
-    mu_H = calculate_mu_H(calc)
+    mu_C = cache.get_chemical_potential('C', calc, calc_name, fmax=FMAX)
+    mu_H = cache.get_chemical_potential('H', calc, calc_name, fmax=FMAX)
     print(f"mu_C = {mu_C:.4f} eV   mu_H = {mu_H:.4f} eV")
 
     # ============================================================
@@ -213,7 +211,10 @@ def main():
     print(f"PRISTINE REFERENCE: {pristine_key}")
     print(f"{'=' * 60}")
     pristine, _ = _load_centered(pristine_key, calc)
-    E_pristine = _relax(pristine, f"pristine ({pristine_key})")
+    pristine, E_pristine = cache.load_or_relax(
+        pristine, pristine_key, calc, calc_name, fmax=FMAX,
+        cell=molecules_data[pristine_key]["cell"],
+        label=f"pristine ({pristine_key})")
 
     results = {}
     for defect_key in defect_keys:

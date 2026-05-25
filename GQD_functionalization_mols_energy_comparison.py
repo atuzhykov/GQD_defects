@@ -58,62 +58,32 @@ Outputs to  legacy_func_<pristine>_vs_<modified>_<calc>/ :
     relaxed_structures_xyz/           relaxed pristine + functionalized (XYZ)
     relaxed_structures_mol/           relaxed pristine + functionalized (MOL, bonds kept)
     functionalization_energy_analysis.txt   full thermodynamic breakdown
-    ring_overlay_<modified>.png       ring-topology overlay of relaxed structure
 """
 
 import os
 import shutil
 
 import numpy as np
-from ase.build import molecule
 from ase.io import read
-from ase.optimize import BFGS
 
+import cache
 from config import molecules_data
-from GQD_basic_defects import setup_calculator, FMAX, BFGS_MAXSTEP
+from GQD_basic_defects import setup_calculator, FMAX
 from map import read_bonds_from_mol, save_structure_file
-from utils import calculate_element_mu, calculate_mu_H
-from ring_overlay import save_ring_overlay
 
 
-# Gas-phase diatomic references X2 -> mu(X) = E(X2)/2.  C and H are handled
-# separately (graphene / H2 via utils) to stay consistent with the other scripts.
-_DIATOMIC_REFERENCE = {
-    'H': 'H2', 'N': 'N2', 'O': 'O2', 'F': 'F2', 'Cl': 'Cl2',
-}
+def build_chemical_potentials(calc, calc_name, elements):
+    """Build {element: mu} for exactly the elements requested, with caching.
 
-
-def _mu_diatomic(calc, element):
-    """mu(element) = E(X2)/2 from a relaxed gas-phase diatomic, same calculator."""
-    formula = _DIATOMIC_REFERENCE[element]
-    ref = molecule(formula)
-    ref.set_cell([15.0, 15.0, 15.0])
-    ref.center()
-    ref.set_pbc(True)
-    ref.calc = calc
-    BFGS(ref, logfile=None).run(fmax=FMAX)
-    return ref.get_potential_energy() / 2.0
-
-
-def build_chemical_potentials(calc, elements):
-    """Build {element: mu} for exactly the elements requested.
-
-    C -> graphene energy/atom, H -> E(H2)/2, diatomic-forming elements -> E(X2)/2.
-    Raises for any element without a defined reference so mistakes are loud.
+    Each mu is fetched through cache.get_chemical_potential (C -> graphene
+    energy/atom, H -> E(H2)/2, diatomic-forming elements -> E(X2)/2), so the
+    underlying graphene/H2/X2 relaxations run at most once per calculator across
+    all runs. Raises for any element without a defined reference so mistakes are
+    loud.
     """
     mu = {}
     for el in sorted(elements):
-        if el == 'C':
-            mu[el] = calculate_element_mu(calc)          # graphene reference
-        elif el == 'H':
-            mu[el] = calculate_mu_H(calc)                # E(H2)/2 reference
-        elif el in _DIATOMIC_REFERENCE:
-            mu[el] = _mu_diatomic(calc, el)              # E(X2)/2 reference
-        else:
-            raise ValueError(
-                f"No elemental chemical-potential reference defined for '{el}'. "
-                f"Add one to build_chemical_potentials() / _DIATOMIC_REFERENCE."
-            )
+        mu[el] = cache.get_chemical_potential(el, calc, calc_name, fmax=FMAX)
         print(f"  mu({el}) = {mu[el]:.4f} eV")
     return mu
 
@@ -140,16 +110,6 @@ def _load_centered(mol_key, calc):
     return atoms, mol_path
 
 
-def _relax(atoms, label):
-    print(f"Relaxing {label} ...")
-    dyn = BFGS(atoms, maxstep=BFGS_MAXSTEP)
-    dyn.run(fmax=FMAX)
-    energy = atoms.get_potential_energy()
-    max_force = np.max(np.linalg.norm(atoms.get_forces(), axis=1))
-    print(f"  {label}: E = {energy:.4f} eV, max_force = {max_force:.4f} eV/A")
-    return energy
-
-
 def _composition(atoms):
     comp = {}
     for sym in atoms.get_chemical_symbols():
@@ -171,7 +131,10 @@ def compare_functionalization(pristine_key, pristine, E_pristine, comp_pristine,
     modified, modified_path = _load_centered(modified_key, calc)
     pristine_path = molecules_data[pristine_key]["path"]
 
-    E_modified = _relax(modified, f"functionalized ({modified_key})")
+    modified, E_modified = cache.load_or_relax(
+        modified, modified_key, calc, calc_name, fmax=FMAX,
+        cell=molecules_data[modified_key]["cell"],
+        label=f"functionalized ({modified_key})")
 
     comp_modified = _composition(modified)
 
@@ -218,11 +181,6 @@ def compare_functionalization(pristine_key, pristine, E_pristine, comp_pristine,
         os.path.join(mol_dir, f"{modified_key}_relaxed.mol"),
         original_bonds=modified.info.get('original_bonds'),
     )
-
-    # ---- ring overlay of the relaxed functionalized structure ----
-    overlay_path = os.path.join(results_dir, f"ring_overlay_{modified_key}.png")
-    save_ring_overlay(modified, overlay_path, ef=E_form,
-                      title=f"functionalization: {pristine_key} -> {modified_key}")
 
     # ---- human-readable description of what changed ----
     added_str = ", ".join(f"{el}x{n}" for el, n in added.items()) or "none"
@@ -280,11 +238,17 @@ def compare_functionalization(pristine_key, pristine, E_pristine, comp_pristine,
     print(f"\nResults saved to: {results_dir}/")
     print(f"  - functionalization_energy_analysis.txt")
     print(f"  - relaxed_structures_xyz/ , relaxed_structures_mol/")
-    print(f"  - ring_overlay_{modified_key}.png")
     return E_form
 
 
 def main():
+    """Driver: relax one pristine GQD once, then compare it to each functionalized GQD.
+
+    Edit pristine_key / modified_keys below (all keys must exist in config.py).
+    Builds μ only for the elements that actually change, relaxes the pristine
+    reference a single time, and reports the functionalization formation energy
+    of every modified structure.
+    """
     calc, calc_name = setup_calculator()
 
     # ============================================================
@@ -311,16 +275,20 @@ def main():
     print(f"\n{'=' * 60}")
     print("CHEMICAL POTENTIALS (computed with the active calculator)")
     print(f"{'=' * 60}")
-    mu = build_chemical_potentials(calc, needed_elements)
+    mu = build_chemical_potentials(calc, calc_name, needed_elements)
 
     # Relax pristine ONCE: every comparison shares the same reference, so
     # re-relaxing it per modified_key is pure waste (1x pristine + N x modified,
-    # vs. the previous N x of each).
+    # vs. the previous N x of each). The relaxation itself is cached on disk, so
+    # repeated runs reuse it entirely.
     print(f"\n{'=' * 60}")
     print(f"PRISTINE REFERENCE: {pristine_key}")
     print(f"{'=' * 60}")
     pristine, _ = _load_centered(pristine_key, calc)
-    E_pristine = _relax(pristine, f"pristine ({pristine_key})")
+    pristine, E_pristine = cache.load_or_relax(
+        pristine, pristine_key, calc, calc_name, fmax=FMAX,
+        cell=molecules_data[pristine_key]["cell"],
+        label=f"pristine ({pristine_key})")
     comp_pristine = _composition(pristine)
 
     results = {}
