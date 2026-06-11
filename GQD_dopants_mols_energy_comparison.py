@@ -14,7 +14,8 @@ Two modes are available in main():
                   comparisons (mirrors the functionalization script).
   * "automated" — scan every substitution site of a single GQD for one dopant and
                   build an energy map (DopingFormationCalculator.analyze_doping_sites).
-                  Kept exactly as before.
+                  Uses the SAME dynamically-computed chemical potentials as the
+                  legacy mode, so both modes agree on E_form.
 
 ------------------------------------------------------------------------------
 FORMATION-ENERGY FORMULA  (legacy mode)
@@ -202,7 +203,7 @@ _FALLBACK_MU = {
 }
 
 
-def build_chemical_potentials(calc, calc_name, elements):
+def build_chemical_potentials(calc, calc_name, elements, fmax=FMAX):
     """Build {element: mu} for exactly the elements requested, with caching.
 
     C/H and the diatomic-forming elements (N/O/F/Cl) are fetched through
@@ -211,11 +212,14 @@ def build_chemical_potentials(calc, calc_name, elements):
     B/P/S/Li fall back to hard-coded literature values (flagged, since their
     energy scale need not match the active calculator). Raises for any element
     with neither reference so mistakes are loud.
+
+    Used by BOTH the legacy pairwise mode and the automated site-map mode, so
+    the two report identical E_form for the same substitution.
     """
     mu = {}
     for el in sorted(elements):
         try:
-            mu[el] = cache.get_chemical_potential(el, calc, calc_name, fmax=FMAX)
+            mu[el] = cache.get_chemical_potential(el, calc, calc_name, fmax=fmax)
         except ValueError:
             if el not in _FALLBACK_MU:
                 raise
@@ -404,8 +408,13 @@ class DopingFormationCalculator:
     an energy map + statistical distribution (analyze_doping_sites). The legacy
     pairwise comparison now lives in the module-level compare_doping() function.
 
-    Note: this automated mode uses the hard-coded chemical_potentials dict below
-    (with uncertainties) rather than the dynamically-computed mu of the legacy mode.
+    Chemical potentials come from the same build_chemical_potentials() as the
+    legacy mode — computed dynamically with the ACTIVE calculator and disk-cached
+    (graphene mu_C, E(H2)/2 mu_H, E(X2)/2 for N/O/F/Cl, flagged literature
+    fallback for B/P/S/Li). Previously this mode used its own hard-coded mu
+    table, whose absolute energy scale did not match the active calculator's
+    total energies, so the site map and the legacy pairwise comparison reported
+    DIFFERENT formation energies for the identical substitution.
     """
 
     def __init__(self, calculator, fmax=FMAX, calc_name="MLIP"):
@@ -419,23 +428,6 @@ class DopingFormationCalculator:
         self.fmax = fmax
         self.calc_name = calc_name
         self.energy_cache = {}  # Cache for calculated energies
-
-        # Chemical potentials with uncertainties [eV]
-        # Based on reference states (bulk or molecular)
-        self.chemical_potentials = {
-            # Host atoms
-            'C': (-9.085, 0.035),  # Graphene/graphite reference
-            'H': (-3.396, 0.015),  # H2/2 reference
-
-            # Common dopants
-            'N': (-8.328, 0.025),  # N2/2 reference
-            'B': (-6.678, 0.030),  # Bulk boron reference
-            'P': (-5.641, 0.030),  # White phosphorus reference
-            'S': (-4.136, 0.030),  # Orthorhombic sulfur
-            'O': (-4.952, 0.020),  # O2/2 reference
-            'F': (-1.912, 0.025),  # F2/2 reference
-            'Li': (-1.82, 0.05),
-        }
 
     def analyze_doping_sites(self, mol_path: str, dopant_element: str, molecule_name: str,
                            show_atom_idx: bool = True, excluded_atoms: List[int] = None,
@@ -522,6 +514,13 @@ class DopingFormationCalculator:
             target_elements = [target_element]
             print(f"Analyzing only {target_element} substitution sites")
 
+        # Chemical potentials: same dynamic, calculator-consistent references as
+        # the legacy mode (cached on disk — computed at most once per calculator).
+        print("Chemical potentials (computed with the active calculator):")
+        mu = build_chemical_potentials(
+            self.calc, self.calc_name,
+            set(target_elements) | {dopant_element}, fmax=self.fmax)
+
         # Loop through each target element atom
         for atom_idx in range(len(base_atoms)):
             if base_atoms[atom_idx].symbol not in target_elements or atom_idx in excluded_atoms:
@@ -546,8 +545,8 @@ class DopingFormationCalculator:
                 # Calculate formation energy using chemical potentials
                 # Get the host element being replaced (could be C or H)
                 host_element = base_atoms[atom_idx].symbol
-                mu_host, sigma_host = self.chemical_potentials[host_element]
-                mu_dopant, sigma_dopant = self.chemical_potentials[dopant_element]
+                mu_host = mu[host_element]
+                mu_dopant = mu[dopant_element]
 
                 # For substitutional doping: ΔE_f = E_doped - E_pristine + μ_host - μ_dopant
                 formation_energy = E_doped - E_pristine + mu_host - mu_dopant
