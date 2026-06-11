@@ -205,7 +205,8 @@ def write_traj_xyz(traj_path, output_file):
 
 
 
-def calculate_formation_energy(perfect, defective, calculator, mu_C, mu_H=0.0):
+def calculate_formation_energy(perfect, defective, calculator, mu_C, mu_H=0.0,
+                               E_perfect=None):
     """
     Calculate formation energy for defects in graphene quantum dots (GQDs).
 
@@ -306,10 +307,15 @@ def calculate_formation_energy(perfect, defective, calculator, mu_C, mu_H=0.0):
     - For edge defects involving functional group disruption, relaxation (via FIRE) should handle
       structural changes, but the formula remains valid.
     """
-    perfect.set_calculator(calculator)
-    defective.set_calculator(calculator)
+    # E_perfect may be passed in precomputed: with a SHARED calculator whose
+    # internal cache was just overwritten by the defect relaxation, calling
+    # perfect.get_potential_energy() here would silently recompute the pristine
+    # energy on every call (a full SCF per defect site under GPAW).
+    if E_perfect is None:
+        perfect.set_calculator(calculator)
+        E_perfect = perfect.get_potential_energy()
 
-    E_perfect = perfect.get_potential_energy()
+    defective.set_calculator(calculator)
     E_defective = defective.get_potential_energy()
 
     # Count removed C and H atoms
@@ -321,11 +327,13 @@ def calculate_formation_energy(perfect, defective, calculator, mu_C, mu_H=0.0):
     n_C_removed = N_el_perfect - N_el_defective
     n_H_removed = N_H_perfect  - N_H_defective
 
-    if n_C_removed == 0:
-        # Stone-Wales: no atoms removed
+    if n_C_removed == 0 and n_H_removed == 0:
+        # Stone-Wales: same composition, pure rearrangement
         E_form = E_defective - E_perfect
     else:
-        # Vacancy / divacancy: account for removed C and any removed H
+        # Vacancy / divacancy / (de)hydrogenation: account for every removed
+        # C and H. NOTE: the old condition `n_C_removed == 0` silently dropped
+        # the n_H_removed*mu_H term whenever only hydrogens changed.
         E_form = E_defective - E_perfect + n_C_removed * mu_C + n_H_removed * mu_H
 
     return E_form

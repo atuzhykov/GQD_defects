@@ -587,10 +587,11 @@ class DopingFormationCalculator:
         # Create energy map dictionary
         energy_map = {idx: energy for idx, energy in zip(atom_indices, formation_energies)}
 
-        # Save formation energies
+        # Save formation energies (failed sites as NaN — a None would force a
+        # pickled object array that np.load refuses by default)
         np.savez(os.path.join(results_dir, "formation_energies.npz"),
                 indices=np.array(atom_indices),
-                energies=np.array(formation_energies))
+                energies=np.array([np.nan if e is None else e for e in formation_energies], dtype=float))
 
         # Write energy map to text file
         with open(os.path.join(results_dir, "energy_map.txt"), 'w') as f:
@@ -817,7 +818,7 @@ def main():
         calculator = DopingFormationCalculator(calc, fmax=FMAX, calc_name=calc_name)
 
         # Configuration
-        molecule_name = "GQD_HEXAGON_3_3"  # Choose which molecule to analyze
+        molecule_name = "GQD_HEX_3_3"  # Choose which molecule to analyze (must be an ACTIVE key in config.py)
         dopant_element = "B"   # Choose dopant: 'Li', 'N', 'B', 'P', 'S', 'O', 'F'
         show_atom_idx = True    # Show atom indices on plots
         excluded_atoms = []     # Optionally exclude specific atoms

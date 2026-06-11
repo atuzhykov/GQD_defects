@@ -120,7 +120,7 @@ def save_structure_file(atoms, xyz_path, mol_path, original_bonds=None):
     write_mol_with_bonds(atoms, mol_path, original_bonds=original_bonds)
 
 
-def setup_structure(molecule_name, calc_name=''):
+def setup_structure(molecule_name, calc, calc_name=''):
     """Set up and relax the initial (pristine) structure.
 
     The relaxation is cached on disk (relaxed_<molecule_name>_<calc>_fmax_<f>_
@@ -129,6 +129,7 @@ def setup_structure(molecule_name, calc_name=''):
 
     Parameters:
     molecule_name: str — key from config.py
+    calc: ASE calculator — the active calculator (was a module global before)
     calc_name: str — calculator name used in the cache filename
 
     Returns:
@@ -167,8 +168,11 @@ def setup_structure(molecule_name, calc_name=''):
     return base_relaxed, base_energy
 
 
-def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=0.0, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8, calc_name=''):
-    """Analyze single vacancy formation energies"""
+def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, calc, element_mu, mu_H=0.0, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8, calc_name=''):
+    """Analyze single vacancy formation energies.
+
+    calc / element_mu are explicit parameters (they were module globals set in
+    __main__ before, which broke any import of this function)."""
     print("\n=== Running Vacancy Analysis ===\n")
     _suffix = f"_{calc_name}" if calc_name else ""
     results_dir = f"vacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}_fmax_{FMAX}{_suffix}"
@@ -219,9 +223,13 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
             optimizer = BFGS(vacancy_atoms, maxstep=BFGS_MAXSTEP)
             optimizer.run(fmax=FMAX)
 
-            # Calculate formation energy (include mu_H if H was removed)
+            # Calculate formation energy (include mu_H if H was removed).
+            # E_perfect=base_energy: the shared calculator's cache now holds the
+            # vacancy structure, so omitting it would re-run the pristine
+            # calculation at EVERY site (a full SCF per site under GPAW).
             _mu_H = mu_H if bonded_h else 0.0
-            formation_energy = calculate_formation_energy(base_relaxed, vacancy_atoms, calc, element_mu, mu_H=_mu_H)
+            formation_energy = calculate_formation_energy(base_relaxed, vacancy_atoms, calc, element_mu, mu_H=_mu_H,
+                                                          E_perfect=base_energy)
 
             formation_energies.append(formation_energy)
             print(f"  Atom {atom_idx} formation energy: {formation_energy:.3f} eV")
@@ -265,8 +273,11 @@ def analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, 
     return atom_indices, formation_energies
 
 
-def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=0.0, max_distance=1.7, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8, calc_name=''):
-    """Analyze divacancy formation energies"""
+def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, calc, element_mu, mu_H=0.0, max_distance=1.7, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8, calc_name=''):
+    """Analyze divacancy formation energies.
+
+    calc / element_mu are explicit parameters (they were module globals set in
+    __main__ before, which broke any import of this function)."""
     print("\n=== Running Divacancy Analysis ===\n")
     _suffix = f"_{calc_name}" if calc_name else ""
     results_dir = f"divacancy_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}_fmax_{FMAX}{_suffix}"
@@ -325,10 +336,13 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
             optimizer = BFGS(divacancy_atoms, maxstep=BFGS_MAXSTEP)
             optimizer.run(fmax=FMAX)
 
-            # Calculate formation energy (consistent formula with vacancy)
+            # Calculate formation energy (consistent formula with vacancy);
+            # E_perfect=base_energy avoids re-running the pristine calculation
+            # at every site with the shared calculator.
             _mu_H = mu_H if bonded_h else 0.0
             formation_energy = calculate_formation_energy(
-                base_relaxed, divacancy_atoms, calc, element_mu, mu_H=_mu_H)
+                base_relaxed, divacancy_atoms, calc, element_mu, mu_H=_mu_H,
+                E_perfect=base_energy)
 
             formation_energies.append(formation_energy)
             print(f"  Divacancy {atom_idx1}-{atom_idx2} formation energy: {formation_energy:.3f} eV")
@@ -374,8 +388,11 @@ def analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name
     return divacancy_pairs, formation_energies
 
 
-def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name, mu_H=0.0, max_distance=1.8, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8, calc_name=''):
-    """Analyze Stone-Wales transformation formation energies"""
+def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name, calc, element_mu, mu_H=0.0, max_distance=1.8, show_atom_idx=True, excluded_atoms=[], atom_idx_fontsize=8, calc_name=''):
+    """Analyze Stone-Wales transformation formation energies.
+
+    calc / element_mu are explicit parameters (they were module globals set in
+    __main__ before, which broke any import of this function)."""
     print("\n=== Running Stone-Wales Analysis ===\n")
     _suffix = f"_{calc_name}" if calc_name else ""
     results_dir = f"stw_map_{molecule_name}_cell_size_{int(base_relaxed.get_cell()[0][0])}_fmax_{FMAX}{_suffix}"
@@ -432,8 +449,11 @@ def analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name
             optimizer = BFGS(stw_atoms, maxstep=BFGS_MAXSTEP)
             optimizer.run(fmax=FMAX)
 
-            # Calculate formation energy (consistent with vacancy/divacancy)
-            formation_energy = calculate_formation_energy(base_relaxed, stw_atoms, calc, element_mu, mu_H=mu_H)
+            # Calculate formation energy (consistent with vacancy/divacancy);
+            # E_perfect=base_energy avoids re-running the pristine calculation
+            # at every bond with the shared calculator.
+            formation_energy = calculate_formation_energy(base_relaxed, stw_atoms, calc, element_mu, mu_H=mu_H,
+                                                          E_perfect=base_energy)
 
             formation_energies.append(formation_energy)
             print(f"  Stone-Wales {atom_idx1}-{atom_idx2} formation energy: {formation_energy:.3f} eV")
@@ -474,10 +494,11 @@ def _process_vacancy_results(results_dir, base_relaxed, atom_indices, formation_
     # Create a dictionary mapping atom indices to formation energies
     energy_map = {idx: energy for idx, energy in zip(atom_indices, formation_energies)}
 
-    # Save formation energies with atom indices
+    # Save formation energies with atom indices (failed sites as NaN — a None
+    # would force a pickled object array that np.load refuses by default)
     np.savez(os.path.join(results_dir, "formation_energies.npz"),
              indices=np.array(atom_indices),
-             energies=np.array(formation_energies))
+             energies=np.array([np.nan if e is None else e for e in formation_energies], dtype=float))
 
     # Write energy map to text file for easy reference
     with open(os.path.join(results_dir, "energy_map.txt"), 'w') as f:
@@ -641,10 +662,11 @@ def _process_divacancy_results(results_dir, base_relaxed, divacancy_pairs, forma
     # Create a dictionary mapping divacancy pairs to formation energies
     energy_map = {pair: energy for pair, energy in zip(divacancy_pairs, formation_energies)}
 
-    # Save formation energies with divacancy pairs
+    # Save formation energies with divacancy pairs (failed pairs as NaN — a None
+    # would force a pickled object array that np.load refuses by default)
     np.savez(os.path.join(results_dir, "divacancy_energies.npz"),
              pairs=np.array(divacancy_pairs),
-             energies=np.array(formation_energies))
+             energies=np.array([np.nan if e is None else e for e in formation_energies], dtype=float))
 
     # Write energy map to text file for easy reference
     with open(os.path.join(results_dir, "energy_map.txt"), 'w') as f:
@@ -846,10 +868,11 @@ def _process_stw_results(results_dir, base_relaxed, bond_pairs, formation_energi
     # Create a dictionary mapping bond pairs to formation energies
     energy_map = {pair: energy for pair, energy in zip(bond_pairs, formation_energies)}
 
-    # Save formation energies with bond pairs
+    # Save formation energies with bond pairs (failed bonds as NaN — a None
+    # would force a pickled object array that np.load refuses by default)
     np.savez(os.path.join(results_dir, "stw_energies.npz"),
              pairs=np.array(bond_pairs),
-             energies=np.array(formation_energies))
+             energies=np.array([np.nan if e is None else e for e in formation_energies], dtype=float))
 
     # Write energy map to text file for easy reference
     with open(os.path.join(results_dir, "energy_map.txt"), 'w') as f:
@@ -1092,22 +1115,25 @@ if __name__ == "__main__":
         element_mu = cache.get_chemical_potential('C', calc, calc_name, fmax=FMAX)
         print(f"Chemical potential mu_C: {element_mu:.3f} eV")
         # Setup initial structure (relaxation cached on disk)
-        base_relaxed, base_energy = setup_structure(molecule_name, calc_name)
+        base_relaxed, base_energy = setup_structure(molecule_name, calc, calc_name)
 
         mu_H = cache.get_chemical_potential('H', calc, calc_name, fmax=FMAX)
         print(f"Chemical potential for H (0.5*E(H2) reference): {mu_H:.3f} eV")
 
         # Run selected analysis
         if defect_type == 'vacancy' or defect_type == 'all':
-            analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=mu_H, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize, calc_name=calc_name)
+            analyze_vacancies(target_element, base_relaxed, base_energy, molecule_name, calc, element_mu,
+                              mu_H=mu_H, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms,
+                              atom_idx_fontsize=atom_idx_fontsize, calc_name=calc_name)
 
         if defect_type == 'divacancy' or defect_type == 'all':
-            analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, mu_H=mu_H,
-                               max_distance=div_dist, show_atom_idx=show_atom_idx, excluded_atoms=excluded_atoms,
+            analyze_divacancies(target_element, base_relaxed, base_energy, molecule_name, calc, element_mu,
+                               mu_H=mu_H, max_distance=div_dist, show_atom_idx=show_atom_idx,
+                               excluded_atoms=excluded_atoms,
                                atom_idx_fontsize=atom_idx_fontsize, calc_name=calc_name)
 
         if defect_type == 'stw' or defect_type == 'all':
-            analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name,
+            analyze_stone_wales(target_element, base_relaxed, base_energy, molecule_name, calc, element_mu,
                                mu_H=mu_H, max_distance=stw_dist, show_atom_idx=show_atom_idx,
                                excluded_atoms=excluded_atoms, atom_idx_fontsize=atom_idx_fontsize, calc_name=calc_name)
 

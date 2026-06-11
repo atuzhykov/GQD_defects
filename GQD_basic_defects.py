@@ -72,7 +72,8 @@ def setup_calculator():
 # ============= EXECUTION =============
 def track_core_structure(fmax, atoms, transforms, calc, element_mu, mu_H,
                          central_atom_index=0, radius=8,
-                         task_name="core_tracking", fix_ends=False, fixed_atoms=[]):
+                         task_name="core_tracking", fix_ends=False, fixed_atoms=[],
+                         E_pristine=None):
     """Apply defect transforms, relax, and track the core region during relaxation.
 
     Applies the given transform(s) to a copy of the pristine structure, relaxes
@@ -93,6 +94,10 @@ def track_core_structure(fmax, atoms, transforms, calc, element_mu, mu_H,
     task_name: str — label used for the experiments/ output subdirectory
     fix_ends: bool — if True, fix atoms farther than `radius` from the center
     fixed_atoms: list[int] — additional atom indices to constrain
+    E_pristine: float | None — precomputed pristine energy [eV]; when given,
+        the formation-energy step skips re-evaluating the pristine structure
+        (the shared calculator's cache holds the defect by then, so omitting
+        it costs an extra pristine + defect recompute per call under GPAW)
 
     Returns:
     ASE Atoms — the relaxed modified (defective) structure
@@ -167,7 +172,8 @@ def track_core_structure(fmax, atoms, transforms, calc, element_mu, mu_H,
     write_traj_xyz(os.path.join(experiment_dir, 'core_trajectory.traj'),
                    os.path.join(experiment_dir, 'core_trajectory.xyz'))
 
-    formation_energy = calculate_formation_energy(atoms, modified_atoms, calc, element_mu, mu_H=mu_H)
+    formation_energy = calculate_formation_energy(atoms, modified_atoms, calc, element_mu, mu_H=mu_H,
+                                                  E_perfect=E_pristine)
 
     with open(os.path.join(experiment_dir, "analysis_output.txt"), "w", encoding="utf-8") as file:
         file.write("Calculation Setup Analysis:\n")
@@ -177,9 +183,6 @@ def track_core_structure(fmax, atoms, transforms, calc, element_mu, mu_H,
 
 
 if __name__ == "__main__":
-    # Initialize calculator
-    calc, calc_name = setup_calculator()
-
     # ============= MOLECULE SETUP =============
     # Choose which molecule to work with from config.py
     molecule_name = "input_pyrene_C16H10"
@@ -212,16 +215,20 @@ if __name__ == "__main__":
     ENABLE_SPLIT_VACANCY = False    # Move one atom to middle, remove other
     ENABLE_STONE_WALES = False      # Bond rotation (Stone-Wales defect)
 
-    # ============= CHEMICAL POTENTIALS =============
-    # Cached per calculator: graphene μ_C and ½·E(H₂) μ_H computed at most once.
-    element_mu = cache.get_chemical_potential('C', calc, calc_name, fmax=FMAX)
-    mu_H = cache.get_chemical_potential('H', calc, calc_name, fmax=FMAX)
-
     # ============= TRANSFORM DEFINITIONS =============
     # Transforms are built after relaxation inside if not DEBUG_MODE (atoms must be relaxed first)
     transforms_config = []
 
     if not DEBUG_MODE:
+        # Calculator + chemical potentials only in run mode: DEBUG_MODE is for
+        # viewing atom indices and must not load a model or trigger the (cached,
+        # but potentially expensive) graphene / H2 reference relaxations.
+        calc, calc_name = setup_calculator()
+
+        # Cached per calculator: graphene μ_C and ½·E(H₂) μ_H computed at most once.
+        element_mu = cache.get_chemical_potential('C', calc, calc_name, fmax=FMAX)
+        mu_H = cache.get_chemical_potential('H', calc, calc_name, fmax=FMAX)
+
         fmax = FMAX
 
         # Create directory for relaxed structures if it doesn't exist
@@ -283,6 +290,12 @@ if __name__ == "__main__":
 
             # Also save to root directory for compatibility
             atoms.write(f"relaxed_{molecule_name}.xyz")
+
+        # Pristine energy for the formation-energy formula: cached in the
+        # calculator after the relax/load above, so this call is free here —
+        # and passing it to track_core_structure avoids re-running the pristine
+        # calculation after each defect relaxation overwrites the calc cache.
+        pristine_energy = atoms.get_potential_energy()
 
         # Build transforms now — atoms is relaxed at this point
         if ENABLE_VACANCY:
@@ -379,6 +392,7 @@ if __name__ == "__main__":
                 element_mu=element_mu,
                 mu_H=mu_H,
                 task_name=full_task_name,
+                E_pristine=pristine_energy,
             )
 
             print(f"✓ Completed: {task_name}")
@@ -398,8 +412,13 @@ if __name__ == "__main__":
         print(f"\nRelaxation settings:")
         print(f"  USE_SAVED_RELAXED: {USE_SAVED_RELAXED}")
         print(f"  Relaxed structures directory: {RELAXED_STRUCTURES_DIR}")
+        # transforms_config is only built in run mode — report the flags instead
         print("\nEnabled transforms:")
-        for config in transforms_config:
-            print(f"  - {config['name']}")
+        for _name, _enabled in [("vacancy", ENABLE_VACANCY),
+                                ("divacancy", ENABLE_DIVACANCY),
+                                ("split_vacancy", ENABLE_SPLIT_VACANCY),
+                                ("stone_wales", ENABLE_STONE_WALES)]:
+            if _enabled:
+                print(f"  - {_name}")
         print("\nSet DEBUG_MODE = False to run calculations")
         print("="*60)

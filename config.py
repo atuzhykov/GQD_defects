@@ -17,8 +17,8 @@ molecules_data = {
         "cell": 45   # max_extent=21.8 A
     },
     "QD_8": {
-        "path": os.path.join("data", "QD_9.mol"),
-        "cell": 55   # max_extent=34.4 A
+        "path": os.path.join("data", "QD_8.mol"),  # was QD_9.mol (copy-paste bug)
+        "cell": 55
     },
     "QD_9": {
         "path": os.path.join("data", "QD_9.mol"),

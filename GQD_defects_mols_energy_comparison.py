@@ -10,9 +10,9 @@ script relaxes both and reports the defect formation energy.
 Vacancy (V), divacancy (VV) and Stone-Wales (SW) are all handled — the defect
 type is auto-detected from the change in carbon count, exactly as in
 utils.calculate_formation_energy:
-    n_C_removed == 0  -> Stone-Wales   E_f = E_defect - E_pristine
-    n_C_removed >= 1  -> V / VV / ...  E_f = E_defect - E_pristine
-                                             + n_C_removed*mu_C + n_H_removed*mu_H
+    no composition change      -> Stone-Wales   E_f = E_defect - E_pristine
+    any C or H count change    -> V / VV / ...  E_f = E_defect - E_pristine
+                                                + n_C_removed*mu_C + n_H_removed*mu_H
 
 Outputs to  legacy_defect_<pristine>_vs_<defect>_<calc>/ :
   input_<...>                       copied input files
@@ -85,8 +85,10 @@ def compare_defect(pristine_key, pristine, E_pristine,
     n_C_removed = n_C_p - n_C_d
     n_H_removed = n_H_p - n_H_d
 
-    if n_C_removed == 0:
+    if n_C_removed == 0 and n_H_removed == 0:
         defect_type = "Stone-Wales"
+    elif n_C_removed == 0:
+        defect_type = f"H-only change ({n_H_removed:+d} H removed)"
     elif n_C_removed == 1:
         defect_type = "vacancy"
     elif n_C_removed == 2:
@@ -101,9 +103,12 @@ def compare_defect(pristine_key, pristine, E_pristine,
     # trigger pristine.get_potential_energy() — and since the shared calculator's
     # internal cache was just overwritten by the defect relaxation, that would
     # silently recompute pristine and erase the speedup.
-    if n_C_removed == 0:
+    if n_C_removed == 0 and n_H_removed == 0:
+        # Stone-Wales: same composition, pure rearrangement
         E_form = E_defect - E_pristine
     else:
+        # NOTE: condition must check H too — `n_C_removed == 0` alone would
+        # silently drop the mu_H term for an H-only (dehydrogenation) change.
         E_form = E_defect - E_pristine + n_C_removed * mu_C + n_H_removed * _mu_H
 
     mu_C_term = n_C_removed * mu_C
