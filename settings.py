@@ -32,6 +32,8 @@ XTICK_LABELSIZE = 12     # X-axis tick labels
 YTICK_LABELSIZE = 12     # Y-axis tick labels
 LEGEND_FONTSIZE = 12     # Legend text
 FIGURE_TITLESIZE = 18    # Figure titles
+ATOM_IDX_FONTSIZE = 8    # Atom-index labels on structure/energy-map plots
+                         # (used when show_atom_idx=True); increase for larger text
 
 # ============================================================================
 # FIGURE / PRINT QUALITY
@@ -80,6 +82,7 @@ def print_settings():
     print(f"  ytick.labelsize   = {YTICK_LABELSIZE}")
     print(f"  legend.fontsize   = {LEGEND_FONTSIZE}")
     print(f"  figure.titlesize  = {FIGURE_TITLESIZE}")
+    print(f"  atom_idx_fontsize = {ATOM_IDX_FONTSIZE}")
     print("Figure / print quality:")
     print(f"  figure.dpi        = {FIGURE_DPI}")
     print(f"  savefig.dpi       = {SAVEFIG_DPI}")

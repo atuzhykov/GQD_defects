@@ -71,7 +71,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from scipy import stats
 
-import settings  # noqa: F401  (side effect: applies the project matplotlib style)
+import settings  # applies the project matplotlib style on import; ATOM_IDX_FONTSIZE
 import cache
 from config import molecules_data
 from GQD_basic_defects import setup_calculator, FMAX
@@ -662,7 +662,8 @@ class DopingFormationCalculator:
                       edgecolors='black', linewidths=1, zorder=10)
 
             if show_atom_idx:
-                ax.text(atom.position[0], atom.position[1], str(i), fontsize=8, zorder=15)
+                ax.text(atom.position[0], atom.position[1], str(i),
+                        fontsize=settings.ATOM_IDX_FONTSIZE, zorder=15)
 
         # Create colorbar
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(min_energy, max_energy))
