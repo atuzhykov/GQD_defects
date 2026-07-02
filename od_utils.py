@@ -49,24 +49,25 @@ def plot_gauss_distribution(data, sigma, gauss_func, path):
       gauss_func: The function representing the Gaussian distribution.
       path (str): Output image path.
     """
-    plt.clf()
-
-    plt.figure()
+    npg = settings.NPG_PALETTE
+    fig, ax = plt.subplots(figsize=(7.2, 5.0))
     x_min = min(data) - 3 * sigma
     x_max = max(data) + 3 * sigma
-    x_vals = np.linspace(x_min, x_max, 100)  # Create 100 points for smooth curve
+    x_vals = np.linspace(x_min, x_max, 200)  # smooth curve
 
-    # Plot the Gaussian distribution function
-    plt.plot(x_vals, gauss_func(x_vals), label="Gaussian Distribution")
+    # Histogram of the sampled energies with the fitted Gaussian on top,
+    # in the npj / Nature house style inherited from settings.py.
+    ax.hist(data, density=True, bins='auto', color=npg[1], alpha=0.55,
+            edgecolor='white', linewidth=1.0, label="Sampled $\\Delta E$")
+    ax.plot(x_vals, gauss_func(x_vals), color=npg[0],
+            label="Gaussian fit")
 
-    plt.hist(data, density=True, alpha=0.5, label="Data Histogram")
-
-    plt.xlabel("x")
-    plt.ylabel("Probability Density")
-    plt.title("Gaussian Distribution for Data")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(path)
+    ax.set_xlabel(r"$\Delta E$ (eV)")
+    ax.set_ylabel("Probability density")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
 
 def record_energy(atoms, energies):

@@ -820,7 +820,7 @@ def main():
 
         # Configuration
         molecule_name = "GQD_HEX_3_3"  # Choose which molecule to analyze (must be an ACTIVE key in config.py)
-        dopant_element = "B"   # Choose dopant: 'Li', 'N', 'B', 'P', 'S', 'O', 'F'
+        dopant_element = "B"   # Choose dopant: 'Li', 'N', 'B', 'P', 'S', 'O', 'F', 'Cl'
         show_atom_idx = True    # Show atom indices on plots
         excluded_atoms = []     # Optionally exclude specific atoms
         replace_H = False       # Set True to also analyze H replacement (wider energy map)

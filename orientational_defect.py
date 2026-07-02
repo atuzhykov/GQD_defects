@@ -114,13 +114,31 @@ def _write_outputs(results_dir, group, calc_name, diff_predictions):
     images_dir = os.path.join(results_dir, "structure_images")
     angles = np.arange(0, TOTAL_ANGLE + 1, angle_step).tolist()
 
-    # Barrier profile (analog of *_map's formation_energy_map.png)
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(angles, diff_predictions, '-o', label='Change in Predictions', color='orange')
-    ax.set_xlabel('Angle (degrees)')
-    ax.set_ylabel('Change in Predicted Energy (eV)')
-    ax.set_title(f'Differential {calc_name} Predictions for {group}')
-    ax.legend()
+    barrier = float(np.max(diff_predictions))
+    max_angle = angles[int(np.argmax(diff_predictions))]
+
+    # Barrier profile (analog of *_map's formation_energy_map.png), rendered in
+    # the npj / Nature house style inherited from settings.py (NPG palette,
+    # open frame, inward ticks, large fonts).
+    npg = settings.NPG_PALETTE
+    fig, ax = plt.subplots(figsize=(7.2, 5.0))
+    ax.plot(angles, diff_predictions, '-o',
+            color=npg[3], markerfacecolor=npg[0],
+            markeredgecolor='white', markeredgewidth=1.0,
+            label='Rotation profile')
+    # Shade the barrier and annotate its height.
+    ax.axhline(0.0, color='0.6', lw=1.0, ls='--', zorder=0)
+    ax.annotate(f'$\\Delta E_\\mathrm{{max}}$ = {barrier:.3f} eV\n@ {max_angle}$^\\circ$',
+                xy=(max_angle, barrier),
+                xytext=(0.55, 0.9), textcoords='axes fraction',
+                fontsize=settings.LEGEND_FONTSIZE,
+                arrowprops=dict(arrowstyle='->', color=npg[0], lw=1.4))
+    ax.set_xlabel('Rotation angle (degrees)')
+    ax.set_ylabel(r'$\Delta E$ (eV)')
+    ax.set_xlim(0, TOTAL_ANGLE)
+    ax.set_xticks(np.arange(0, TOTAL_ANGLE + 1, 60))
+    ax.margins(y=0.12)
+    ax.legend(loc='upper left')
     plt.tight_layout()
     plt.savefig(os.path.join(results_dir, "energy_barrier_profile.png"))
     plt.close(fig)
@@ -130,8 +148,6 @@ def _write_outputs(results_dir, group, calc_name, diff_predictions):
     plot_gauss_distribution(diff_predictions, sigma, gauss_func,
                             os.path.join(results_dir, "energy_distribution.png"))
 
-    barrier = float(np.max(diff_predictions))
-    max_angle = angles[int(np.argmax(diff_predictions))]
     with open(os.path.join(results_dir, "energy_distribution.txt"), 'w') as f:
         f.write("# Rotational Energy-Barrier Distribution\n")
         f.write(f"# Mean: {mu:.6f} eV\n")
